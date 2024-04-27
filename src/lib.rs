@@ -1,7 +1,10 @@
-use std::{collections::HashMap, time::Instant, path::Path, ffi::OsStr};
-
 pub mod config;
 pub use config::Config;
+
+pub mod error;
+pub use error::{Result, Error};
+
+use std::{collections::HashMap, time::Instant, path::Path, ffi::OsStr};
 
 use aws_sdk_s3::{
     Client,
@@ -10,7 +13,6 @@ use aws_sdk_s3::{
 };
 use aws_config::{BehaviorVersion, Region};
 use aws_smithy_types::byte_stream::{ByteStream, Length};
-use anyhow::Context; 
 use tokio::{fs, task::JoinSet};
 use async_walkdir::{Filtering, WalkDir};
 use async_recursion::async_recursion;
@@ -19,10 +21,10 @@ use tokio_stream::StreamExt;
 const AWS_MAX_RETRIES: u32 = 10;
 
 enum Mode {
-    Dif,      // show dif
-    Upload,   // upload files without checking dif
-    Sync,     // check file name and size and upload
-    Show,     // show files
+    Dif,
+    Upload, // upload files without checking target
+    Sync, // check file name and size and upload
+    Show,
 }
 
 impl Mode {
@@ -49,13 +51,13 @@ impl Mode {
     }
 }
 
-pub async fn run(config: Config, mode: String) -> anyhow::Result<()> {
+pub async fn run(config: Config, mode: String) -> Result<()> {
     if let Some(mode) = Mode::new(&mode) {
         let now = Instant::now();
         let source = config.source.to_string();
         let target = format!("s3://{}/{}", &config.bucket, &config.target);
         println!("sync-tool started with mode: {} for source: {} target: {}", mode.value(), &source, &target);
-        let client = get_aws_client(&config.region).await?;
+        let client = get_aws_client(&config.region).await;
         match mode {
             Mode::Dif => {
                 dif(client, config).await?;
@@ -76,8 +78,11 @@ pub async fn run(config: Config, mode: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_aws_client(region: &str) -> anyhow::Result<Client> {
-    let config = aws_config::defaults(BehaviorVersion::v2023_11_09()).region(Region::new(region.to_string())).load().await;
+async fn get_aws_client(region: &str) -> Client {
+    let config = aws_config::defaults(BehaviorVersion::v2023_11_09())
+        .region(Region::new(region.to_string()))
+        .load()
+        .await;
     let client = Client::from_conf(
         aws_sdk_s3::config::Builder::from(&config)
             .retry_config(aws_config::retry::RetryConfig::standard()
@@ -85,26 +90,23 @@ async fn get_aws_client(region: &str) -> anyhow::Result<Client> {
             .build()
     );
 
-    Ok(client)
+    client
 }
 
-async fn get_object(client: &Client, bucket_name: &str, key: &str) -> anyhow::Result<GetObjectOutput> {
+async fn get_object(client: &Client, bucket_name: &str, key: &str) -> Result<GetObjectOutput> {
     Ok(client
         .get_object()
         .bucket(bucket_name)
         .key(key)
         .send()
-        .await
-        .context(format!("could not get object for key: {}", key))?
+        .await?
     )
 }
 
-async fn dif(client: Client, config: Config) -> anyhow::Result<()> {
+async fn dif(client: Client, config: Config) -> Result<()> {
 	let source_task = tokio::spawn(files_walker(config.source.clone()));
     let target_task = tokio::spawn(list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone()));
-    let (source, target) = (source_task.await.context("task failed for source")?, target_task.await.context("task failed for target")?);
-    let source = source.context("could not get data for source")?;
-    let target = target.context("could not get data for target")?;
+    let (source, target) = (source_task.await??, target_task.await??);
 
     let dif = dif_calc(&config, &source, &target);
     match dif {
@@ -140,19 +142,18 @@ fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap<Str
     }
 }
 
-async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P) -> anyhow::Result<HashMap<String, i64>> {
+async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P) -> Result<HashMap<String, i64>> {
     #[async_recursion]
-    async fn files_walker_inner<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P, files: &mut HashMap<String, i64>) -> anyhow::Result<()> {
-        let mut entries = fs::read_dir(&path).await.context(format!("could not read path: {:?}", &path))?;
-        while let Some(entry) = entries.next_entry().await.context("could not read from stream")? {
+    async fn files_walker_inner<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P, files: &mut HashMap<String, i64>) -> Result<()> {
+        let mut entries = fs::read_dir(&path).await?;
+        while let Some(entry) = entries.next_entry().await? {
             if entry.path().is_file() {
                 if entry.path().file_name().unwrap_or(OsStr::new("no_file_name")).to_string_lossy().starts_with(".DS_Store") {
                     continue;
                 }
-                
                 let file_name = entry.path().to_string_lossy().to_string();             
                 let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                let file_size = entry.metadata().await.context(format!("could not get metadata for entry: {:?}", entry.path()))?.len() as i64;
+                let file_size = entry.metadata().await?.len() as i64;
                 files.insert(file_name, file_size);
             } else if entry.path().is_dir() && !entry.file_name().to_string_lossy().starts_with(".DS_Store") {
                 files_walker_inner(entry.path(), files).await?;
@@ -163,12 +164,12 @@ async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + s
     }
 
     let mut files: HashMap<String, i64> = HashMap::new();
-    files_walker_inner(path, &mut files).await.context("could not run files_walker_inner")?;
+    files_walker_inner(path, &mut files).await?;
 
     Ok(files)
 }
 
-async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> anyhow::Result<HashMap<String, i64>> {
+async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> Result<HashMap<String, i64>> {
 	let mut stream = client
         .list_objects_v2()
         .bucket(bucket)
@@ -177,8 +178,7 @@ async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> any
         .send();
     
 	let mut files: HashMap<String, i64> = HashMap::new();
-    while let Some(output) = stream.next().await {
-        let objects = output.context("could not get data from stream")?;
+    while let Some(objects) = stream.next().await.transpose()? {
         for obj in objects.contents().to_owned() {
             if let Some(f_name) = &obj.key {
                 let f_size = obj.size().unwrap_or(0);
@@ -190,22 +190,17 @@ async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> any
 	Ok(files)
 }
 
-
-async fn show(client: Client, config: Config) -> anyhow::Result<()> {
+async fn show(client: Client, config: Config) -> Result<()> {
     let source_task = tokio::spawn(files_walker(config.source));
     let target_task = tokio::spawn(list_keys_stream(client, config.bucket, config.target));
-    let (source, target) = (source_task.await.context("task failed for source")?, target_task.await.context("task failed for target")?);
-    let source = source.context("could not get data for source")?;
-    let target = target.context("could not get data for target")?;
-
-    dbg!(&source);
-    dbg!(&target);
+    let (source, target) = (source_task.await??, target_task.await??);
+    println!("source: {:?}", source);
+    println!("target: {:?}", target);
 
     Ok(())
 }
 
-async fn upload(client: Client, config: Config) -> anyhow::Result<()> {
-    // skip hidden files
+async fn upload(client: Client, config: Config) -> Result<()> {
     let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
         if let Some(true) = entry
             .path()
@@ -219,14 +214,13 @@ async fn upload(client: Client, config: Config) -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
     let mut outputs = Vec::new();
     let chunk_size = config.chunk_size * 1024 * 1024; // MB
-    while let Some(entry) = entries.next().await {
-        let entry = entry.context("could not get entry from stream")?;
+    while let Some(entry) = entries.next().await.transpose()? {
         if let Ok(file) = entry.file_type().await {
             if file.is_file() {
                 let file_name = entry.path().to_string_lossy().to_string();             
                 let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                let file_size = entry.metadata().await.context(format!("could not get metadata for entry: {:?}", entry.path()))?.len();
-                let file_name = Path::new(&file_name).strip_prefix(&config.source).context("could not strip file path")?;
+                let file_size = entry.metadata().await?.len();
+                let file_name = Path::new(&file_name).strip_prefix(&config.source)?;
                 let file_name = file_name.to_string_lossy().to_string();
                 let key = format!("{}{}", &config.target, &file_name);
                 let f_name = format!("{}{}", &config.source, &file_name);
@@ -256,10 +250,8 @@ async fn upload(client: Client, config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn sync(client: Client, config: Config) -> anyhow::Result<()> {
-    let target = list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone())
-        .await
-        .context("could not get files for target")?;
+async fn sync(client: Client, config: Config) -> Result<()> {
+    let target = list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone()).await?;
 
     let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
         if let Some(true) = entry
@@ -273,15 +265,14 @@ async fn sync(client: Client, config: Config) -> anyhow::Result<()> {
 
     let mut tasks = JoinSet::new();
     let mut outputs = Vec::new();
-    let chunk_size = config.chunk_size * 1024 * 1024; // MB
-    while let Some(entry) = entries.next().await {
-        let entry = entry.context("could not get entry from stream")?;
+    let chunk_size = config.chunk_size * 1024 * 1024; // MiB
+    while let Some(entry) = entries.next().await.transpose()? {
         if let Ok(file) = entry.file_type().await {
             if file.is_file() {
                 let file_name = entry.path().to_string_lossy().to_string();             
                 let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                let source_file_size = entry.metadata().await.context(format!("could not get metadata for entry: {:?}", entry.path()))?.len();
-                let source_file_name = Path::new(&file_name).strip_prefix(&config.source).context("could not strip file path")?;
+                let source_file_size = entry.metadata().await?.len();
+                let source_file_name = Path::new(&file_name).strip_prefix(&config.source)?;
                 let source_file_name = source_file_name.to_string_lossy().to_string();
                 let target_file_name = format!("{}{}", &config.target, &source_file_name);
                 let target_file_size = target.get(&target_file_name).unwrap_or(&0);
@@ -314,8 +305,8 @@ async fn sync(client: Client, config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn upload_object(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64) -> anyhow::Result<()> {
-    let body = ByteStream::from_path(Path::new(&file_name)).await.context(format!("could not get byte stream from file: {}", file_name))?;
+async fn upload_object(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64) -> Result<()> {
+    let body = ByteStream::from_path(Path::new(&file_name)).await?;
     println!("Uploading file: {}", file_name);
 
     client
@@ -324,27 +315,22 @@ async fn upload_object(client: Client, bucket_name: String, file_name: String, k
         .key(&key)
         .body(body)
         .send()
-        .await
-        .context(format!("could not put object: {}", key))?;
+        .await?;
 
     println!("Uploaded file: {}", file_name);
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
-    let data_length: u64 = data
-        .content_length()
-        .unwrap_or_default()
-        .try_into()
-        .context(format!("could not get data length for key: {}", key))?;
-
+    let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size == data_length {
-        // println!("Data lengths match.");
+        // println!("Data lengths match");
     } else {
-        return Err(anyhow::anyhow!(format!("The data was not the same size for key: {}", key)));
+        return Err(Error::Custom("Failed checking data size after upload".into()));
     }
+
     Ok(())
 }
 
-pub async fn upload_object_multipart(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64, chunk_size: u64, max_chunks: u64) -> anyhow::Result<()> {
+pub async fn upload_object_multipart(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64, chunk_size: u64, max_chunks: u64) -> Result<()> {
     println!("Uploading file: {}", file_name);
 
     let multipart_upload_res: CreateMultipartUploadOutput = client
@@ -352,8 +338,7 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
         .bucket(&bucket_name)
         .key(&key)
         .send()
-        .await
-        .context(format!("could not create multipart_upload for key: {}", key))?;
+        .await?;
 
     let upload_id = multipart_upload_res.upload_id().unwrap_or_default();
     let path = Path::new(&file_name);
@@ -365,10 +350,10 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(anyhow::anyhow!(format!("Bad file size for: {}", file_name)));
+        return Err(Error::Custom(format!("Bad file size for: {}", file_name)));
     }
     if chunk_count > max_chunks {
-        return Err(anyhow::anyhow!(format!("Too many chunks file: {}. Try increasing your chunk size", file_name)));
+        return Err(Error::Custom(format!("Too many chunks file: {}. Try increasing your chunk size", file_name)));
     }
 
     let mut upload_parts: Vec<CompletedPart> = Vec::new();
@@ -383,8 +368,7 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
             .offset(chunk_index * chunk_size)
             .length(Length::Exact(this_chunk))
             .build()
-            .await
-            .context(format!("could not create stream for file: {}", file_name))?;
+            .await?;
 
         let part_number = (chunk_index as i32) + 1;
         let upload_part_res = client
@@ -395,8 +379,7 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
             .body(stream)
             .part_number(part_number)
             .send()
-            .await
-            .context(format!("could not upload part: {} for key: {}", part_number, key))?;
+            .await?;
 
         upload_parts.push(
             CompletedPart::builder()
@@ -417,22 +400,16 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
         .multipart_upload(completed_multipart_upload)
         .upload_id(upload_id)
         .send()
-        .await
-        .context(format!("could not complete multipart upload for key: {}", key))?;
+        .await?;
 
     println!("Uploaded file: {}", file_name);
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
-    let data_length: u64 = data
-        .content_length()
-        .unwrap_or_default()
-        .try_into()
-        .context(format!("could not get data length for key: {}", key))?;
-
+    let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size == data_length {
         // println!("Data lengths match.");
     } else {
-        return Err(anyhow::anyhow!(format!("The data was not the same size for key: {}", key)));
+        return Err(Error::Custom("Failed checking data size after upload".into()));
     }
 
     Ok(())

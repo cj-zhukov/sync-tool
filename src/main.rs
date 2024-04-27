@@ -9,5 +9,6 @@ async fn main() -> anyhow::Result<()> {
     let config_file = args.next().unwrap_or("sync-tool.json".to_string());
     let config = Config::new(&config_file).await?;
     run(config, mode).await?;
-    Ok(())
+
+	Ok(())
 }
