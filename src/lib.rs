@@ -4,7 +4,7 @@ pub use config::Config;
 pub mod error;
 pub use error::{Result, Error};
 
-use std::{collections::HashMap, time::Instant, path::Path, ffi::OsStr};
+use std::{collections::HashMap, path::Path, ffi::OsStr};
 
 use aws_sdk_s3::{
     Client,
@@ -18,30 +18,32 @@ use async_walkdir::{Filtering, WalkDir};
 use async_recursion::async_recursion;
 use tokio_stream::StreamExt;
 
-const AWS_MAX_RETRIES: u32 = 10;
+pub const AWS_MAX_RETRIES: u32 = 10;
+pub const CONFIG_NAME: &str = "sync-tool.json";
+pub const DEFAULT_MODE: &str = "dif";
 
-enum Mode {
-    Dif,
+pub enum Mode {
+    Dif,    // check dif in file name and size
     Upload, // upload files without checking target
     Sync, // check file name and size and upload
-    Show,
+    Show, // print source and target files
 }
 
 impl Mode {
-    fn new(mode: &str) -> Option<Self> {
+    pub fn new(mode: &str) -> Option<Self> {
         match mode {
             "dif" | "Dif" | "DIF" => Some(Self::Dif),
             "upload" | "Upload" | "UPLOAD" => Some(Self::Upload),
             "sync" | "Sync" | "SYNC" => Some(Self::Sync),
             "show" | "Show" | "SHOW" => Some(Self::Show),
             _ => { 
-                println!("unknown mode: {}", mode);
+                println!("unknown mode provided: {} valid: dif, upload, sync, show", mode);
                 None 
             }
         }
     }
 
-    fn value(&self) -> &str {
+    pub fn value(&self) -> &str {
         match *self {
             Self::Dif => "dif",
             Self::Upload => "upload",
@@ -51,34 +53,7 @@ impl Mode {
     }
 }
 
-pub async fn run(config: Config, mode: String) -> Result<()> {
-    if let Some(mode) = Mode::new(&mode) {
-        let now = Instant::now();
-        let source = config.source.to_string();
-        let target = format!("s3://{}/{}", &config.bucket, &config.target);
-        println!("sync-tool started with mode: {} for source: {} target: {}", mode.value(), &source, &target);
-        let client = get_aws_client(&config.region).await;
-        match mode {
-            Mode::Dif => {
-                dif(client, config).await?;
-            }
-            Mode::Upload => {
-                upload(client, config).await?;
-            }
-            Mode::Sync => {
-                sync(client, config).await?;
-            } 
-            Mode::Show => {
-                show(client, config).await?;
-            }
-        }
-        println!("sync-tool finished with mode: {} for source: {} target: {} elapsed: {:.2?}", mode.value(), &source, &target, now.elapsed());
-    }
-
-    Ok(())
-}
-
-async fn get_aws_client(region: &str) -> Client {
+pub async fn get_aws_client(region: &str) -> Client {
     let config = aws_config::defaults(BehaviorVersion::v2023_11_09())
         .region(Region::new(region.to_string()))
         .load()
@@ -103,7 +78,7 @@ async fn get_object(client: &Client, bucket_name: &str, key: &str) -> Result<Get
     )
 }
 
-async fn dif(client: Client, config: Config) -> Result<()> {
+pub async fn dif(client: Client, config: Config) -> Result<()> {
 	let source_task = tokio::spawn(files_walker(config.source.clone()));
     let target_task = tokio::spawn(list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone()));
     let (source, target) = (source_task.await??, target_task.await??);
@@ -117,7 +92,7 @@ async fn dif(client: Client, config: Config) -> Result<()> {
     Ok(())
 }
 
-fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap<String, i64>) -> Option<HashMap<String, i64>> {
+pub fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap<String, i64>) -> Option<HashMap<String, i64>> {
     let mut dif: HashMap<String, i64> = HashMap::new();
     for (k, v) in source.into_iter() {
         let source_f_name = k.strip_prefix(&config.source).unwrap_or("no_file_name").to_string();
@@ -142,7 +117,7 @@ fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap<Str
     }
 }
 
-async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P) -> Result<HashMap<String, i64>> {
+pub async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P) -> Result<HashMap<String, i64>> {
     #[async_recursion]
     async fn files_walker_inner<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P, files: &mut HashMap<String, i64>) -> Result<()> {
         let mut entries = fs::read_dir(&path).await?;
@@ -169,7 +144,7 @@ async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + s
     Ok(files)
 }
 
-async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> Result<HashMap<String, i64>> {
+pub async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> Result<HashMap<String, i64>> {
 	let mut stream = client
         .list_objects_v2()
         .bucket(bucket)
@@ -190,7 +165,7 @@ async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> Res
 	Ok(files)
 }
 
-async fn show(client: Client, config: Config) -> Result<()> {
+pub async fn show(client: Client, config: Config) -> Result<()> {
     let source_task = tokio::spawn(files_walker(config.source));
     let target_task = tokio::spawn(list_keys_stream(client, config.bucket, config.target));
     let (source, target) = (source_task.await??, target_task.await??);
@@ -200,7 +175,7 @@ async fn show(client: Client, config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn upload(client: Client, config: Config) -> Result<()> {
+pub async fn upload(client: Client, config: Config) -> Result<()> {
     let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
         if let Some(true) = entry
             .path()
@@ -250,7 +225,7 @@ async fn upload(client: Client, config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn sync(client: Client, config: Config) -> Result<()> {
+pub async fn sync(client: Client, config: Config) -> Result<()> {
     let target = list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone()).await?;
 
     let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
@@ -330,7 +305,7 @@ async fn upload_object(client: Client, bucket_name: String, file_name: String, k
     Ok(())
 }
 
-pub async fn upload_object_multipart(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64, chunk_size: u64, max_chunks: u64) -> Result<()> {
+async fn upload_object_multipart(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64, chunk_size: u64, max_chunks: u64) -> Result<()> {
     println!("Uploading file: {}", file_name);
 
     let multipart_upload_res: CreateMultipartUploadOutput = client
