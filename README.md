@@ -8,9 +8,9 @@ sync-tool calculates differents between file names and sizes of source and targe
 Use the package manager cargo or docker to install sync-tool.
 
 ## Usage
-```rust
+```bash
 # sync-tool mode config-name
 # mode: app mode dif | show | upload | sync
 # config-name: config json filepath (sync-tool.json is default)
-sync-tool sync sync-tool.json
+./sync-tool sync sync-tool.json
 ```
