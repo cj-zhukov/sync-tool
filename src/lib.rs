@@ -58,14 +58,13 @@ pub async fn get_aws_client(region: &str) -> Client {
         .region(Region::new(region.to_string()))
         .load()
         .await;
-    let client = Client::from_conf(
+
+    Client::from_conf(
         aws_sdk_s3::config::Builder::from(&config)
             .retry_config(aws_config::retry::RetryConfig::standard()
             .with_max_attempts(AWS_MAX_RETRIES))
             .build()
-    );
-
-    client
+    )
 }
 
 async fn get_object(client: &Client, bucket_name: &str, key: &str) -> Result<GetObjectOutput> {
@@ -94,7 +93,7 @@ pub async fn dif(client: Client, config: Config) -> Result<()> {
 
 pub fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap<String, i64>) -> Option<HashMap<String, i64>> {
     let mut dif: HashMap<String, i64> = HashMap::new();
-    for (k, v) in source.into_iter() {
+    for (k, v) in source.iter() {
         let source_f_name = k.strip_prefix(&config.source).unwrap_or("no_file_name").to_string();
         let source_f_size = *v;
         let target_f_name = format!("{}{}", &config.target, &source_f_name);
@@ -117,9 +116,13 @@ pub fn dif_calc(config: &Config, source: &HashMap<String, i64>, target: &HashMap
     }
 }
 
-pub async fn files_walker<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P) -> Result<HashMap<String, i64>> {
+pub async fn files_walker<P>(path: P) -> Result<HashMap<String, i64>>
+where P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug,  
+    {
     #[async_recursion]
-    async fn files_walker_inner<P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug>(path: P, files: &mut HashMap<String, i64>) -> Result<()> {
+    async fn files_walker_inner<P>(path: P, files: &mut HashMap<String, i64>) -> Result<()> 
+    where P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug,
+    {
         let mut entries = fs::read_dir(&path).await?;
         while let Some(entry) = entries.next_entry().await? {
             if entry.path().is_file() {
@@ -154,7 +157,7 @@ pub async fn list_keys_stream(client: Client, bucket: String, prefix: String) ->
     
 	let mut files: HashMap<String, i64> = HashMap::new();
     while let Some(objects) = stream.next().await.transpose()? {
-        for obj in objects.contents().to_owned() {
+        for obj in objects.contents().iter().cloned() {
             if let Some(f_name) = &obj.key {
                 let f_size = obj.size().unwrap_or(0);
                 files.insert(f_name.clone(), f_size);

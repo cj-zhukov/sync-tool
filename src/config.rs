@@ -28,7 +28,7 @@ impl Config {
 
 impl std::fmt::Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Config info: bucket={} region={} source={} target={} workers={} chunk_size={} max_chunks={}\n", 
+        writeln!(f, "Config info: bucket: {} region: {} source: {} target: {} workers: {} chunk_size: {} max_chunks: {}", 
         self.bucket,
         self.region,
         self.source,

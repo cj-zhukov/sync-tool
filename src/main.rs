@@ -6,7 +6,7 @@ use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let now = Instant::now();
-    let mut args = env::args().into_iter();
+    let mut args = env::args();
     let _ = args.next();
     let mode = args.next().unwrap_or(DEFAULT_MODE.to_string());
     let config_file = args.next().unwrap_or(CONFIG_NAME.to_string());
