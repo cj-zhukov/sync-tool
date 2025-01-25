@@ -2,7 +2,6 @@ use std::{env, time::Instant};
 
 use sync_tool::sync_tool::{dif, show, sync, upload, Mode};
 use sync_tool::utils::aws::get_aws_client;
-use sync_tool::utils::config::Config;
 use sync_tool::utils::constants::*;
 
 use anyhow::Result;
@@ -13,8 +12,7 @@ async fn main() -> Result<()> {
     let mut args = env::args();
     let _ = args.next();
     let mode = args.next().unwrap_or(DEFAULT_MODE.to_string());
-    let config_file = args.next().unwrap_or(CONFIG_NAME.to_string());
-    let config = Config::new(&config_file).await?;
+    let config = CONFIG.to_owned();
     if let Some(mode) = Mode::new(&mode) {
         let source = config.source.to_string();
         let target = format!("s3://{}/{}", &config.bucket, &config.target);

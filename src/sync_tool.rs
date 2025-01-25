@@ -2,7 +2,7 @@ use std::{collections::HashMap, ffi::OsStr, path::Path};
 
 use crate::utils::{
     aws::{list_keys_stream, upload_object, upload_object_multipart},
-    config::Config,
+    config::AppConfig,
     tools::sanitize_file_path,
 };
 use crate::Result;
@@ -14,9 +14,9 @@ use tokio::{fs, task::JoinSet};
 use tokio_stream::StreamExt;
 
 /// Mode has 4 options:
-/// dif - check dif in file name and size
-/// upload - upload files without checking target
-/// sync - check file name and size and upload
+/// dif - calculate and show dif in file name and size
+/// upload - simple upload files without checking target file names and sizes
+/// sync - smart check file name and size and upload
 /// show - print source and target files
 pub enum Mode {
     Dif,    
@@ -55,7 +55,7 @@ impl Mode {
 }
 
 /// Calculate dif and print
-pub async fn dif(client: Client, config: Config) -> Result<()> {
+pub async fn dif(client: Client, config: AppConfig) -> Result<()> {
     let source_task = tokio::spawn(files_walker(config.source.clone()));
     let target_task = tokio::spawn(list_keys_stream(
         client.clone(),
@@ -74,7 +74,7 @@ pub async fn dif(client: Client, config: Config) -> Result<()> {
 }
 
 fn dif_calc(
-    config: &Config,
+    config: &AppConfig,
     source: &HashMap<String, i64>,
     target: &HashMap<String, i64>,
 ) -> Option<HashMap<String, i64>> {
@@ -147,18 +147,17 @@ where
 }
 
 /// Print files from source and target folders
-pub async fn show(client: Client, config: Config) -> Result<()> {
+pub async fn show(client: Client, config: AppConfig) -> Result<()> {
     let source_task = tokio::spawn(files_walker(config.source));
     let target_task = tokio::spawn(list_keys_stream(client, config.bucket, config.target));
     let (source, target) = (source_task.await??, target_task.await??);
     println!("source: {:?}", source);
     println!("target: {:?}", target);
-
     Ok(())
 }
 
 /// Upload files from source to target without checking file name and size
-pub async fn upload(client: Client, config: Config) -> Result<()> {
+pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
     let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
         if let Some(true) = entry
             .path()
@@ -219,12 +218,11 @@ pub async fn upload(client: Client, config: Config) -> Result<()> {
             Err(e) => println!("could not run task: {}", e),
         }
     }
-
     Ok(())
 }
 
 /// Sync files from source to target with checking file name and size
-pub async fn sync(client: Client, config: Config) -> Result<()> {
+pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
     let target =
         list_keys_stream(client.clone(), config.bucket.clone(), config.target.clone()).await?;
 
@@ -291,6 +289,5 @@ pub async fn sync(client: Client, config: Config) -> Result<()> {
             Err(e) => println!("could not run task: {}", e),
         }
     }
-
     Ok(())
 }
