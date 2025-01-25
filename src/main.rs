@@ -1,7 +1,7 @@
 use std::{env, time::Instant};
 
+use sync_tool::sync_tool::{Mode, dif, upload, sync, show};
 use sync_tool::utils::aws::get_aws_client;
-use sync_tool::{Mode, dif, upload, sync, show};
 use sync_tool::utils::constants::*;
 use sync_tool::utils::config::Config;
 
