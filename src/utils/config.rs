@@ -2,9 +2,9 @@ use crate::Result;
 
 use std::fmt::Debug;
 
-use tokio::fs;
 use serde::Deserialize;
 use serde_json;
+use tokio::fs;
 
 #[derive(Deserialize, Debug)]
 pub struct Config {
@@ -13,12 +13,12 @@ pub struct Config {
     pub source: String,
     pub target: String,
     pub workers: usize,
-    pub chunk_size: usize, 
+    pub chunk_size: usize,
     pub max_chunks: usize,
 }
 
 impl Config {
-    pub async fn new(file_path: &str) -> Result<Config>  {
+    pub async fn new(file_path: &str) -> Result<Config> {
         let contents = fs::read_to_string(file_path).await?;
         let config: Config = serde_json::from_str(contents.as_str())?;
 
@@ -38,4 +38,4 @@ impl std::fmt::Display for Config {
         self.max_chunks,
         )
     }
- }
+}

@@ -1,5 +1,5 @@
-pub mod utils;
 pub mod error;
 pub mod sync_tool;
+pub mod utils;
 
-pub use error::{Result, Error};
+pub use error::{Error, Result};
