@@ -1,5 +1,9 @@
-use sync_tool::{Config, Mode, CONFIG_NAME, DEFAULT_MODE, get_aws_client, dif, upload, sync, show};
 use std::{env, time::Instant};
+
+use sync_tool::utils::aws::get_aws_client;
+use sync_tool::{Mode, dif, upload, sync, show};
+use sync_tool::utils::constants::*;
+use sync_tool::utils::config::Config;
 
 use anyhow::Result;
 
