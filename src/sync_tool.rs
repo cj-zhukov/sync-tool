@@ -20,6 +20,17 @@ pub enum Mode {
     Show,   // print source and target files
 }
 
+impl AsRef<str> for Mode {
+    fn as_ref(&self) -> &str {
+        match *self {
+            Self::Dif => "dif",
+            Self::Upload => "upload",
+            Self::Sync => "sync",
+            Self::Show => "show",
+        }
+    }
+}
+
 impl Mode {
     pub fn new(mode: &str) -> Option<Self> {
         match mode {
@@ -34,15 +45,6 @@ impl Mode {
                 );
                 None
             }
-        }
-    }
-
-    pub fn value(&self) -> &str {
-        match *self {
-            Self::Dif => "dif",
-            Self::Upload => "upload",
-            Self::Sync => "sync",
-            Self::Show => "show",
         }
     }
 }

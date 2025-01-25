@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         let target = format!("s3://{}/{}", &config.bucket, &config.target);
         println!(
             "sync-tool started with mode: {} for source: {} target: {}",
-            mode.value(),
+            mode.as_ref(),
             &source,
             &target
         );
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         }
         println!(
             "sync-tool finished with mode: {} for source: {} target: {} elapsed: {:.2?}",
-            mode.value(),
+            mode.as_ref(),
             &source,
             &target,
             now.elapsed()
