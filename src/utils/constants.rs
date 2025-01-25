@@ -5,7 +5,6 @@ use config::{Config, File};
 use super::config::AppConfig;
 
 pub const AWS_MAX_RETRIES: u32 = 10;
-pub const AWS_REGION: &str = "eu-central-1";
 pub const CONFIG_NAME: &str = "sync-tool.json";
 pub const DEFAULT_MODE: &str = "dif";
 
