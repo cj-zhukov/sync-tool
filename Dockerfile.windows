@@ -1,11 +1,17 @@
-FROM rust:latest
+FROM rust:1.81 AS builder
 
-RUN apt update && apt upgrade -y
-RUN apt install -y g++-mingw-w64-x86-64
-
+RUN apt-get update && apt-get install -y g++-mingw-w64-x86-64
 RUN rustup target add x86_64-pc-windows-gnu
-RUN rustup toolchain install stable-x86_64-pc-windows-gnu
 
 WORKDIR /app
+COPY . .
+
+RUN cargo install cargo-chef
+RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
 CMD ["cargo", "build", "--release", "--target", "x86_64-pc-windows-gnu"]
+
+# how to build binary for windows and copy-paste binary into local target folder
+# $ docker build -t rust-cross-compile/windows -f Dockerfile.windows .
+# $ docker run --rm -v $(pwd):/app rust-cross-compile/windows
