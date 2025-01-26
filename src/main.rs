@@ -6,11 +6,10 @@ use sync_tool::sync_tool::{dif, show, sync, upload, Mode};
 use sync_tool::utils::aws::get_aws_client;
 use sync_tool::utils::constants::*;
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    
+
     let now = Instant::now();
     let mut args = env::args();
     let _ = args.next();

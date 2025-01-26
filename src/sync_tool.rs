@@ -170,8 +170,8 @@ pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
     });
 
     let mut tasks = JoinSet::new();
-    let mut outputs = Vec::new();
     let chunk_size = config.chunk_size * 1024 * 1024; // MB
+
     while let Some(entry) = entries.next().await.transpose()? {
         if let Ok(file) = entry.file_type().await {
             if file.is_file() {
@@ -204,16 +204,26 @@ pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
                 };
 
                 if tasks.len() == config.workers {
-                    outputs.push(tasks.join_next().await);
+                    if let Some (res) = tasks.join_next().await {
+                        match res {
+                            Ok(res) => {
+                                if let Err(e) = res {
+                                    println!("could not upload object: {}", e);
+                                }
+                            },
+                            Err(e) => println!("failed running task: {}", e)
+                        }
+                    }
                 }
             }
         }
     }
     while let Some(res) = tasks.join_next().await {
         match res {
-            Ok(res) => match res {
-                Ok(_) => (),
-                Err(e) => println!("could not upload object: {}", e),
+            Ok(res) => {
+                if let Err(e) = res {
+                    println!("could not upload object: {}", e);
+                }
             },
             Err(e) => println!("could not run task: {}", e),
         }
@@ -238,8 +248,8 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
     });
 
     let mut tasks = JoinSet::new();
-    let mut outputs = Vec::new();
     let chunk_size = config.chunk_size * 1024 * 1024; // MiB
+
     while let Some(entry) = entries.next().await.transpose()? {
         if let Ok(file) = entry.file_type().await {
             if file.is_file() {
@@ -274,7 +284,16 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
                     };
 
                     if tasks.len() == config.workers {
-                        outputs.push(tasks.join_next().await);
+                        if let Some (res) = tasks.join_next().await {
+                            match res {
+                                Ok(res) => {
+                                    if let Err(e) = res {
+                                        println!("could not upload object: {}", e);
+                                    }
+                                },
+                                Err(e) => println!("failed running task: {}", e)
+                            }
+                        }
                     }
                 }
             }
@@ -282,9 +301,10 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
     }
     while let Some(res) = tasks.join_next().await {
         match res {
-            Ok(res) => match res {
-                Ok(_) => (),
-                Err(e) => println!("could not upload object: {}", e),
+            Ok(res) => {
+                if let Err(e) = res {
+                    println!("could not upload object: {}", e);
+                }
             },
             Err(e) => println!("could not run task: {}", e),
         }

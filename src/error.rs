@@ -13,6 +13,7 @@ use std::num::ParseIntError;
 use std::path::StripPrefixError;
 use thiserror::Error;
 use tokio::task::JoinError;
+use tokio::sync::AcquireError;
 
 pub type Result<T> = core::result::Result<T, SyncToolError>;
 
@@ -59,6 +60,9 @@ pub enum SyncToolError {
 
     #[error("tokio join error")]
     TokioJoinError(#[from] JoinError),
+
+    #[error("tokio acquire semaphore error")]
+    AcquireError(#[from] AcquireError),
 
     #[error("unexpected error")]
     UnexpectedError(#[source] Report),
