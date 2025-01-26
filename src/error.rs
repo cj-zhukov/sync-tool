@@ -1,5 +1,3 @@
-pub type Result<T> = core::result::Result<T, Error>;
-
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadError;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadError;
@@ -9,56 +7,59 @@ use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::operation::upload_part::UploadPartError;
 use aws_smithy_types::byte_stream::error::Error as AwsSmithyError;
+use color_eyre::eyre::Report;
 use std::io::Error as IOError;
 use std::num::ParseIntError;
 use std::path::StripPrefixError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("custom error: `{0}`")]
-    Custom(String),
+pub type Result<T> = core::result::Result<T, SyncToolError>;
 
-    #[error("parse int error: `{0}`")]
+#[derive(Error, Debug)]
+pub enum SyncToolError {
+    #[error("parse int error")]
     ParseIntError(#[from] ParseIntError),
 
-    #[error("strip prefix error: `{0}`")]
+    #[error("strip prefix error")]
     StripPrefixError(#[from] StripPrefixError),
 
-    #[error("io error: `{0}`")]
+    #[error("io error")]
     IOError(#[from] IOError),
 
-    #[error("config parse error: `{0}`")]
+    #[error("config parse error")]
     ConfigParseError(#[from] serde_json::Error),
 
-    #[error("aws_sdk_s3 error: `{0}`")]
+    #[error("aws sdk s3 error")]
     AwsSdkS3Error(#[from] aws_sdk_s3::Error),
 
-    #[error("delete object error: {0}")]
+    #[error("delete object aws sdk error")]
     DeleteObjectError(#[from] SdkError<DeleteObjectError>),
 
-    #[error("listing object error: {0}")]
+    #[error("list object aws sdk error")]
     ListObjectError(#[from] SdkError<ListObjectsV2Error>),
 
-    #[error("get object error: {0}")]
+    #[error("get object aws sdk error")]
     GetObjectError(#[from] SdkError<GetObjectError>),
 
-    #[error("put object error: {0}")]
+    #[error("put object aws sdk error")]
     PutObjectError(#[from] SdkError<PutObjectError>),
 
-    #[error("create multipart object error: {0}")]
+    #[error("create multipart object aws sdk error")]
     CreateMultipartError(#[from] SdkError<CreateMultipartUploadError>),
 
-    #[error("complit multipart object error: {0}")]
-    ComplitMultipartError(#[from] SdkError<CompleteMultipartUploadError>),
+    #[error("complete multipart object aws sdk error")]
+    CompleteMultipartError(#[from] SdkError<CompleteMultipartUploadError>),
 
-    #[error("upload part object error: {0}")]
+    #[error("upload part object aws sdk error")]
     UploadPartError(#[from] SdkError<UploadPartError>),
 
-    #[error("byte stream error: {0}")]
+    #[error("byte stream aws smithy error")]
     ByteSreamError(#[from] AwsSmithyError),
 
-    #[error("tokio join error: {0}")]
+    #[error("tokio join error")]
     TokioJoinError(#[from] JoinError),
+
+    #[error("unexpected error")]
+    UnexpectedError(#[source] Report),
 }

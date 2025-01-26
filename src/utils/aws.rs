@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use crate::{Error, Result};
+use crate::{SyncToolError, Result};
 use crate::utils::constants::*;
 
 use aws_config::{BehaviorVersion, Region};
@@ -10,9 +10,10 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
     operation::{create_multipart_upload::CreateMultipartUploadOutput, get_object::GetObjectOutput},
 };
+use color_eyre::eyre::Report;
 
 pub async fn get_aws_client(region: &str) -> Client {
-    let config = aws_config::defaults(BehaviorVersion::v2023_11_09())
+    let config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.to_string()))
         .load()
         .await;
@@ -72,10 +73,8 @@ pub async fn upload_object(client: Client, bucket_name: String, file_name: Strin
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
-    if file_size == data_length {
-        // println!("Data lengths match");
-    } else {
-        return Err(Error::Custom("Failed checking data size after upload".into()));
+    if file_size != data_length {
+        return Err(SyncToolError::UnexpectedError(Report::msg("Source and target data sizes after upload don't match")));
     }
 
     Ok(())
@@ -101,10 +100,10 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(Error::Custom(format!("Bad file size for: {}", file_name)));
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!("Bad file size for: {}", file_name))));
     }
     if chunk_count > max_chunks {
-        return Err(Error::Custom(format!("Too many chunks file: {}. Try increasing your chunk size", file_name)));
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!("Too many chunks file: {}. Try increasing your chunk size", file_name))));
     }
 
     let mut upload_parts: Vec<CompletedPart> = Vec::new();
@@ -157,10 +156,8 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
-    if file_size == data_length {
-        // println!("Data lengths match.");
-    } else {
-        return Err(Error::Custom("Failed checking data size after upload".into()));
+    if file_size != data_length {
+        return Err(SyncToolError::UnexpectedError(Report::msg("Source and target data sizes after upload don't match")));
     }
 
     Ok(())
