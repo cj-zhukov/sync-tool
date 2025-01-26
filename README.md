@@ -8,7 +8,7 @@ sync-tool calculates differents between file names and sizes of source and targe
 Use the package manager cargo or docker to install sync-tool.
 
 ## Config file sync-tool.json
-``bash
+```bash
     "bucket": str target bucket for upload example: "bucket"
     "region": str region name example: "region"
     "source": str data source example: "path/to/data/",
