@@ -11,10 +11,10 @@ Use the package manager cargo or docker to install sync-tool.
 ```bash
     "bucket": str target bucket for upload example: "bucket"
     "region": str region name example: "region"
-    "source": str data source example: "path/to/data/",
-    "target": str data target in AWS S3 example: "path/to/data/",
-    "workers": int count files for uploading in parallel example: 10,
-    "chunk_size": int size in MiB, if less then whole file will be uploaded, else by chunk example: 10,
+    "source": str data source example: "path/to/data/"
+    "target": str data target in AWS S3 example: "path/to/data/"
+    "workers": int count files for uploading in parallel example: 10
+    "chunk_size": int size in MiB, if less then whole file will be uploaded, else by chunk example: 10
     "max_chunks": int count of chunks for file, describes max file to be uploaded example: 10000
 ```
 
