@@ -12,8 +12,8 @@ use std::io::Error as IOError;
 use std::num::ParseIntError;
 use std::path::StripPrefixError;
 use thiserror::Error;
-use tokio::task::JoinError;
 use tokio::sync::AcquireError;
+use tokio::task::JoinError;
 
 pub type Result<T> = core::result::Result<T, SyncToolError>;
 

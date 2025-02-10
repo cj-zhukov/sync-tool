@@ -1,15 +1,17 @@
 use std::{collections::HashMap, path::Path};
 
-use crate::{SyncToolError, Result};
 use crate::utils::constants::*;
+use crate::{Result, SyncToolError};
 
 use aws_config::{BehaviorVersion, Region};
-use aws_smithy_types::byte_stream::{ByteStream, Length};
 use aws_sdk_s3::{
-    Client,
+    operation::{
+        create_multipart_upload::CreateMultipartUploadOutput, get_object::GetObjectOutput,
+    },
     types::{CompletedMultipartUpload, CompletedPart},
-    operation::{create_multipart_upload::CreateMultipartUploadOutput, get_object::GetObjectOutput},
+    Client,
 };
+use aws_smithy_types::byte_stream::{ByteStream, Length};
 use color_eyre::eyre::Report;
 
 pub async fn get_aws_client(region: &str) -> Client {
@@ -20,9 +22,10 @@ pub async fn get_aws_client(region: &str) -> Client {
 
     Client::from_conf(
         aws_sdk_s3::config::Builder::from(&config)
-            .retry_config(aws_config::retry::RetryConfig::standard()
-            .with_max_attempts(AWS_MAX_RETRIES))
-            .build()
+            .retry_config(
+                aws_config::retry::RetryConfig::standard().with_max_attempts(AWS_MAX_RETRIES),
+            )
+            .build(),
     )
 }
 
@@ -32,19 +35,22 @@ pub async fn get_object(client: &Client, bucket_name: &str, key: &str) -> Result
         .bucket(bucket_name)
         .key(key)
         .send()
-        .await?
-    )
+        .await?)
 }
 
-pub async fn list_keys_stream(client: Client, bucket: String, prefix: String) -> Result<HashMap<String, i64>> {
-	let mut stream = client
+pub async fn list_keys_stream(
+    client: Client,
+    bucket: String,
+    prefix: String,
+) -> Result<HashMap<String, i64>> {
+    let mut stream = client
         .list_objects_v2()
         .bucket(bucket)
         .prefix(prefix)
         .into_paginator()
         .send();
-    
-	let mut files: HashMap<String, i64> = HashMap::new();
+
+    let mut files: HashMap<String, i64> = HashMap::new();
     while let Some(objects) = stream.next().await.transpose()? {
         for obj in objects.contents().iter().cloned() {
             if let Some(f_name) = &obj.key {
@@ -54,10 +60,16 @@ pub async fn list_keys_stream(client: Client, bucket: String, prefix: String) ->
         }
     }
 
-	Ok(files)
+    Ok(files)
 }
 
-pub async fn upload_object(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64) -> Result<()> {
+pub async fn upload_object(
+    client: Client,
+    bucket_name: String,
+    file_name: String,
+    key: String,
+    file_size: u64,
+) -> Result<()> {
     let body = ByteStream::from_path(Path::new(&file_name)).await?;
     println!("Uploading file: {}", file_name);
 
@@ -74,13 +86,23 @@ pub async fn upload_object(client: Client, bucket_name: String, file_name: Strin
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg("Source and target data sizes after upload don't match")));
+        return Err(SyncToolError::UnexpectedError(Report::msg(
+            "Source and target data sizes after upload don't match",
+        )));
     }
 
     Ok(())
 }
 
-pub async fn upload_object_multipart(client: Client, bucket_name: String, file_name: String, key: String, file_size: u64, chunk_size: u64, max_chunks: u64) -> Result<()> {
+pub async fn upload_object_multipart(
+    client: Client,
+    bucket_name: String,
+    file_name: String,
+    key: String,
+    file_size: u64,
+    chunk_size: u64,
+    max_chunks: u64,
+) -> Result<()> {
     println!("Uploading file: {}", file_name);
 
     let multipart_upload_res: CreateMultipartUploadOutput = client
@@ -100,10 +122,16 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!("Bad file size for: {}", file_name))));
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+            "Bad file size for: {}",
+            file_name
+        ))));
     }
     if chunk_count > max_chunks {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!("Too many chunks file: {}. Try increasing your chunk size", file_name))));
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+            "Too many chunks file: {}. Try increasing your chunk size",
+            file_name
+        ))));
     }
 
     let mut upload_parts: Vec<CompletedPart> = Vec::new();
@@ -157,7 +185,9 @@ pub async fn upload_object_multipart(client: Client, bucket_name: String, file_n
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg("Source and target data sizes after upload don't match")));
+        return Err(SyncToolError::UnexpectedError(Report::msg(
+            "Source and target data sizes after upload don't match",
+        )));
     }
 
     Ok(())

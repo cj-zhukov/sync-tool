@@ -3,6 +3,7 @@ use std::{collections::HashMap, ffi::OsStr, path::Path};
 use crate::utils::{
     aws::{list_keys_stream, upload_object, upload_object_multipart},
     config::AppConfig,
+    constants::FILES_TO_IGNORE,
     tools::sanitize_file_path,
 };
 use crate::Result;
@@ -19,9 +20,9 @@ use tokio_stream::StreamExt;
 /// sync - smart check file name and size and upload
 /// show - print source and target files
 pub enum Mode {
-    Dif,    
+    Dif,
     Upload,
-    Sync, 
+    Sync,
     Show,
 }
 
@@ -117,32 +118,32 @@ where
         let mut entries = fs::read_dir(&path).await?;
         while let Some(entry) = entries.next_entry().await? {
             if entry.path().is_file() {
-                if entry
-                    .path()
-                    .file_name()
-                    .unwrap_or(OsStr::new("no_file_name"))
-                    .to_string_lossy()
-                    .starts_with(".DS_Store")
-                {
+                if FILES_TO_IGNORE.iter().any(|f| {
+                    entry
+                        .path()
+                        .file_name()
+                        .unwrap_or(OsStr::new("no_file_name"))
+                        .to_string_lossy()
+                        == *f
+                }) {
                     continue;
                 }
+
                 let file_name = entry.path().to_string_lossy().to_string();
                 let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
                 let file_size = entry.metadata().await?.len() as i64;
                 files.insert(file_name, file_size);
             } else if entry.path().is_dir()
-                && !entry.file_name().to_string_lossy().starts_with(".DS_Store")
+            // && !entry.file_name().to_string_lossy().starts_with(".DS_Store") // #TODO seperate files and folders to ignore?
             {
                 files_walker_inner(entry.path(), files).await?;
             }
         }
-
         Ok(())
     }
 
     let mut files: HashMap<String, i64> = HashMap::new();
     files_walker_inner(path, &mut files).await?;
-
     Ok(files)
 }
 
@@ -162,7 +163,7 @@ pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
         if let Some(true) = entry
             .path()
             .file_name()
-            .map(|f| f.to_string_lossy().starts_with(".DS_Store"))
+            .map(|file| FILES_TO_IGNORE.iter().any(|f| file.to_string_lossy() == *f))
         {
             return Filtering::IgnoreDir;
         }
@@ -204,14 +205,14 @@ pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
                 };
 
                 if tasks.len() == config.workers {
-                    if let Some (res) = tasks.join_next().await {
+                    if let Some(res) = tasks.join_next().await {
                         match res {
                             Ok(res) => {
                                 if let Err(e) = res {
                                     println!("could not upload object: {}", e);
                                 }
-                            },
-                            Err(e) => println!("failed running task: {}", e)
+                            }
+                            Err(e) => println!("failed running task: {}", e),
                         }
                     }
                 }
@@ -224,7 +225,7 @@ pub async fn upload(client: Client, config: AppConfig) -> Result<()> {
                 if let Err(e) = res {
                     println!("could not upload object: {}", e);
                 }
-            },
+            }
             Err(e) => println!("could not run task: {}", e),
         }
     }
@@ -240,7 +241,7 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
         if let Some(true) = entry
             .path()
             .file_name()
-            .map(|f| f.to_string_lossy().starts_with(".DS_Store"))
+            .map(|file| FILES_TO_IGNORE.iter().any(|f| file.to_string_lossy() == *f))
         {
             return Filtering::IgnoreDir;
         }
@@ -284,14 +285,14 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
                     };
 
                     if tasks.len() == config.workers {
-                        if let Some (res) = tasks.join_next().await {
+                        if let Some(res) = tasks.join_next().await {
                             match res {
                                 Ok(res) => {
                                     if let Err(e) = res {
                                         println!("could not upload object: {}", e);
                                     }
-                                },
-                                Err(e) => println!("failed running task: {}", e)
+                                }
+                                Err(e) => println!("failed running task: {}", e),
                             }
                         }
                     }
@@ -305,7 +306,7 @@ pub async fn sync(client: Client, config: AppConfig) -> Result<()> {
                 if let Err(e) = res {
                     println!("could not upload object: {}", e);
                 }
-            },
+            }
             Err(e) => println!("could not run task: {}", e),
         }
     }
