@@ -1,9 +1,0 @@
-{
-    "bucket": "dmg-data-dev",
-    "region": "eu-central-1",
-    "source": "/Users/szhukov/Documents/Docs/demo/considering-rust/",
-    "target": "szhukov/data/demo/considering-rust/",
-    "workers": 4,
-    "chunk_size": 10,
-    "max_chunks": 10000
-}
