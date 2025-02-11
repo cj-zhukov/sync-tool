@@ -1,5 +1,5 @@
 # sync-tool
-sync-tool is a Rust library for uploading files from local storage (Windows/Linux/Mac) into AWS S3.
+sync-tool is a Rust library for uploading files from local storage (Windows/Linux/Mac) to cloud storage (like AWS S3, etc).
 
 ## Description
 sync-tool calculates differents between file names and sizes of source and target folder and upload to the cloud.
