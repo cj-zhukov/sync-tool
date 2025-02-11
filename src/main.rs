@@ -4,7 +4,7 @@ use color_eyre::Result;
 
 use sync_tool::cloud_storage::aws::AwsStorage;
 use sync_tool::domain::CloudStorage;
-use sync_tool::sync_tool::Mode;
+use sync_tool::Mode;
 use sync_tool::utils::aws::get_aws_client;
 use sync_tool::utils::constants::*;
 
