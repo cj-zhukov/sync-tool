@@ -3,7 +3,7 @@ pub mod domain;
 pub mod error;
 pub mod utils;
 
-pub use error::{Result, SyncToolError};
+pub use error::SyncToolError;
 
 /// Mode has 4 options:
 /// dif - calculate and show dif in file name and size

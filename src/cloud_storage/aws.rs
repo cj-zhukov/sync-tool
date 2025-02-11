@@ -14,12 +14,12 @@ use tokio_stream::StreamExt;
 use crate::{
     domain::CloudStorage,
     utils::{
-        config::AppConfig,
-        constants::FILES_TO_IGNORE,
-        tools::{files_walker, sanitize_file_path},
+        config::AppConfig, constants::FILES_TO_IGNORE, error::UtilsError, tools::{files_walker, sanitize_file_path}
     },
     SyncToolError,
 };
+
+use super::error::AwsStorageError;
 
 pub struct AwsStorage {
     client: Client,
@@ -41,7 +41,7 @@ impl CloudStorage for AwsStorage {
             config.bucket.clone(),
             config.target.clone(),
         ));
-        let (source, target) = (source_task.await??, target_task.await??);
+        let (source, target) = (source_task.await.map_err(|e| UtilsError::TokioJoinError(e))??, target_task.await.map_err(|e| UtilsError::TokioJoinError(e))??);
 
         let dif = dif_calc(&config, &source, &target);
         match dif {
@@ -59,7 +59,7 @@ impl CloudStorage for AwsStorage {
             config.bucket.clone(),
             config.target.clone(),
         ));
-        let (source, target) = (source_task.await??, target_task.await??);
+        let (source, target) = (source_task.await.map_err(|e| UtilsError::TokioJoinError(e))??, target_task.await.map_err(|e| UtilsError::TokioJoinError(e))??);
         println!("source: {:?}", source);
         println!("target: {:?}", target);
         Ok(())
@@ -81,13 +81,13 @@ impl CloudStorage for AwsStorage {
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MB
 
-        while let Some(entry) = entries.next().await.transpose()? {
+        while let Some(entry) = entries.next().await.transpose().map_err(|e| UtilsError::IOError(e))? {
             if let Ok(file) = entry.file_type().await {
                 if file.is_file() {
                     let file_name = entry.path().to_string_lossy().to_string();
                     let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                    let file_size = entry.metadata().await?.len();
-                    let file_name = Path::new(&file_name).strip_prefix(&config.source)?;
+                    let file_size = entry.metadata().await.map_err(|e| UtilsError::IOError(e))?.len();
+                    let file_name = Path::new(&file_name).strip_prefix(&config.source).map_err(|e| UtilsError::StripPrefixError(e))?;
                     let file_name = file_name.to_string_lossy().to_string();
                     let key = format!("{}{}", &config.target, &file_name);
                     let f_name = format!("{}{}", &config.source, &file_name);
@@ -163,13 +163,13 @@ impl CloudStorage for AwsStorage {
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MiB
 
-        while let Some(entry) = entries.next().await.transpose()? {
+        while let Some(entry) = entries.next().await.transpose().map_err(|e| UtilsError::IOError(e))? {
             if let Ok(file) = entry.file_type().await {
                 if file.is_file() {
                     let file_name = entry.path().to_string_lossy().to_string();
                     let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                    let source_file_size = entry.metadata().await?.len();
-                    let source_file_name = Path::new(&file_name).strip_prefix(&config.source)?;
+                    let source_file_size = entry.metadata().await.map_err(|e| UtilsError::IOError(e))?.len();
+                    let source_file_name = Path::new(&file_name).strip_prefix(&config.source).map_err(|e| UtilsError::StripPrefixError(e))?;
                     let source_file_name = source_file_name.to_string_lossy().to_string();
                     let target_file_name = format!("{}{}", &config.target, &source_file_name);
                     let target_file_size = target.get(&target_file_name).unwrap_or(&0);
@@ -262,7 +262,7 @@ async fn get_object(
     client: &Client,
     bucket_name: &str,
     key: &str,
-) -> Result<GetObjectOutput, SyncToolError> {
+) -> Result<GetObjectOutput, AwsStorageError> {
     Ok(client
         .get_object()
         .bucket(bucket_name)
@@ -275,7 +275,7 @@ async fn list_keys_stream(
     client: Client,
     bucket: String,
     prefix: String,
-) -> Result<HashMap<String, i64>, SyncToolError> {
+) -> Result<HashMap<String, i64>, AwsStorageError> {
     let mut stream = client
         .list_objects_v2()
         .bucket(bucket)
@@ -302,7 +302,7 @@ async fn upload_object(
     file_name: String,
     key: String,
     file_size: u64,
-) -> Result<(), SyncToolError> {
+) -> Result<(), AwsStorageError> {
     let body = ByteStream::from_path(Path::new(&file_name)).await?;
     println!("Uploading file: {}", file_name);
 
@@ -319,7 +319,7 @@ async fn upload_object(
     let data = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
@@ -335,7 +335,7 @@ async fn upload_object_multipart(
     file_size: u64,
     chunk_size: u64,
     max_chunks: u64,
-) -> Result<(), SyncToolError> {
+) -> Result<(), AwsStorageError> {
     println!("Uploading file: {}", file_name);
 
     let multipart_upload_res = client
@@ -355,13 +355,13 @@ async fn upload_object_multipart(
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
             "Bad file size for: {}",
             file_name
         ))));
     }
     if chunk_count > max_chunks {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
             "Too many chunks file: {}. Try increasing your chunk size",
             file_name
         ))));
@@ -418,10 +418,9 @@ async fn upload_object_multipart(
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
-
     Ok(())
 }

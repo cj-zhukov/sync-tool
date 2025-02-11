@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsStr, path::Path};
 use async_recursion::async_recursion;
 use tokio::fs;
 
-use crate::{utils::constants::FILES_TO_IGNORE, SyncToolError};
+use crate::{utils::constants::FILES_TO_IGNORE, utils::error::UtilsError};
 
 /// Prepare Windows path
 pub fn sanitize_file_path(path: &str) -> String {
@@ -11,7 +11,7 @@ pub fn sanitize_file_path(path: &str) -> String {
 }
 
 /// Get local files names and size
-pub async fn files_walker<P>(path: P) -> Result<HashMap<String, i64>, SyncToolError>
+pub async fn files_walker<P>(path: P) -> Result<HashMap<String, i64>, UtilsError>
 where
     P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug,
 {
@@ -19,7 +19,7 @@ where
     async fn files_walker_inner<P>(
         path: P,
         files: &mut HashMap<String, i64>,
-    ) -> Result<(), SyncToolError>
+    ) -> Result<(), UtilsError>
     where
         P: AsRef<Path> + std::marker::Send + std::marker::Sync + std::fmt::Debug,
     {
