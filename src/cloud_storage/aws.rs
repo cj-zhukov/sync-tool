@@ -14,7 +14,10 @@ use tokio_stream::StreamExt;
 use crate::{
     domain::CloudStorage,
     utils::{
-        config::AppConfig, constants::FILES_TO_IGNORE, error::UtilsError, tools::{files_walker, sanitize_file_path}
+        config::AppConfig,
+        constants::FILES_TO_IGNORE,
+        error::UtilsError,
+        tools::{files_walker, sanitize_file_path},
     },
     SyncToolError,
 };
@@ -41,7 +44,14 @@ impl CloudStorage for AwsStorage {
             config.bucket.clone(),
             config.target.clone(),
         ));
-        let (source, target) = (source_task.await.map_err(|e| UtilsError::TokioJoinError(e))??, target_task.await.map_err(|e| UtilsError::TokioJoinError(e))??);
+        let (source, target) = (
+            source_task
+                .await
+                .map_err(|e| UtilsError::TokioJoinError(e))??,
+            target_task
+                .await
+                .map_err(|e| UtilsError::TokioJoinError(e))??,
+        );
 
         let dif = dif_calc(&config, &source, &target);
         match dif {
@@ -59,7 +69,14 @@ impl CloudStorage for AwsStorage {
             config.bucket.clone(),
             config.target.clone(),
         ));
-        let (source, target) = (source_task.await.map_err(|e| UtilsError::TokioJoinError(e))??, target_task.await.map_err(|e| UtilsError::TokioJoinError(e))??);
+        let (source, target) = (
+            source_task
+                .await
+                .map_err(|e| UtilsError::TokioJoinError(e))??,
+            target_task
+                .await
+                .map_err(|e| UtilsError::TokioJoinError(e))??,
+        );
         println!("source: {:?}", source);
         println!("target: {:?}", target);
         Ok(())
@@ -68,73 +85,68 @@ impl CloudStorage for AwsStorage {
     /// Upload files from source to target without checking file name and size
     async fn upload(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
-            if let Some(true) = entry
+            entry
                 .path()
                 .file_name()
                 .map(|file| FILES_TO_IGNORE.iter().any(|f| file.to_string_lossy() == *f))
-            {
-                return Filtering::IgnoreDir;
-            }
-            Filtering::Continue
+                .unwrap_or(false)
+                .then_some(Filtering::IgnoreDir)
+                .unwrap_or(Filtering::Continue)
         });
 
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MB
 
-        while let Some(entry) = entries.next().await.transpose().map_err(|e| UtilsError::IOError(e))? {
-            if let Ok(file) = entry.file_type().await {
-                if file.is_file() {
-                    let file_name = entry.path().to_string_lossy().to_string();
-                    let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                    let file_size = entry.metadata().await.map_err(|e| UtilsError::IOError(e))?.len();
-                    let file_name = Path::new(&file_name).strip_prefix(&config.source).map_err(|e| UtilsError::StripPrefixError(e))?;
-                    let file_name = file_name.to_string_lossy().to_string();
-                    let key = format!("{}{}", &config.target, &file_name);
-                    let f_name = format!("{}{}", &config.source, &file_name);
+        while let Some(entry) = entries
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| UtilsError::IOError(e))?
+        {
+            if entry
+                .file_type()
+                .await
+                .map_err(|e| UtilsError::IOError(e))?
+                .is_file()
+            {
+                let file_name = entry.path().to_string_lossy().to_string();
+                let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
+                let file_size = entry
+                    .metadata()
+                    .await
+                    .map_err(|e| UtilsError::IOError(e))?
+                    .len();
+                let file_name = Path::new(&file_name)
+                    .strip_prefix(&config.source)
+                    .map_err(|e| UtilsError::StripPrefixError(e))?;
+                let file_name = file_name.to_string_lossy().to_string();
+                let key = format!("{}{}", &config.target, &file_name);
+                let f_name = format!("{}{}", &config.source, &file_name);
 
-                    if file_size < chunk_size as u64 {
-                        tasks.spawn(upload_object(
-                            self.client.clone(),
-                            config.bucket.clone(),
-                            f_name,
-                            key,
-                            file_size,
-                        ))
-                    } else {
-                        tasks.spawn(upload_object_multipart(
-                            self.client.clone(),
-                            config.bucket.clone(),
-                            f_name,
-                            key,
-                            file_size,
-                            chunk_size as u64,
-                            config.max_chunks as u64,
-                        ))
-                    };
+                let task_info = UploadTaskInfo {
+                    client: self.client.clone(),
+                    bucket: config.bucket.clone(),
+                    local_path: f_name,
+                    s3_key: key,
+                    size: file_size,
+                    chunk_size: chunk_size as u64,
+                    max_chunks: config.max_chunks as u64,
+                };
 
-                    if tasks.len() == config.workers {
-                        if let Some(res) = tasks.join_next().await {
-                            match res {
-                                Ok(res) => {
-                                    if let Err(e) = res {
-                                        println!("could not upload object: {}", e);
-                                    }
-                                }
-                                Err(e) => println!("failed running task: {}", e),
-                            }
-                        }
-                    }
+                if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
+                    eprintln!("Failed to spawn upload task: {}", e);
                 }
             }
         }
+
         while let Some(res) = tasks.join_next().await {
             match res {
                 Ok(res) => {
                     if let Err(e) = res {
-                        println!("could not upload object: {}", e);
+                        eprintln!("Upload task failed: {:?}", e);
                     }
                 }
-                Err(e) => println!("could not run task: {}", e),
+                Err(e) => eprintln!("Task panicked or was cancelled: {:?}", e),
             }
         }
         Ok(())
@@ -150,80 +162,84 @@ impl CloudStorage for AwsStorage {
         .await?;
 
         let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
-            if let Some(true) = entry
+            entry
                 .path()
                 .file_name()
                 .map(|file| FILES_TO_IGNORE.iter().any(|f| file.to_string_lossy() == *f))
-            {
-                return Filtering::IgnoreDir;
-            }
-            Filtering::Continue
+                .unwrap_or(false)
+                .then_some(Filtering::IgnoreDir)
+                .unwrap_or(Filtering::Continue)
         });
 
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MiB
 
-        while let Some(entry) = entries.next().await.transpose().map_err(|e| UtilsError::IOError(e))? {
-            if let Ok(file) = entry.file_type().await {
-                if file.is_file() {
-                    let file_name = entry.path().to_string_lossy().to_string();
-                    let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
-                    let source_file_size = entry.metadata().await.map_err(|e| UtilsError::IOError(e))?.len();
-                    let source_file_name = Path::new(&file_name).strip_prefix(&config.source).map_err(|e| UtilsError::StripPrefixError(e))?;
-                    let source_file_name = source_file_name.to_string_lossy().to_string();
-                    let target_file_name = format!("{}{}", &config.target, &source_file_name);
-                    let target_file_size = target.get(&target_file_name).unwrap_or(&0);
+        while let Some(entry) = entries
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| UtilsError::IOError(e))?
+        {
+            if entry
+                .file_type()
+                .await
+                .map_err(|e| UtilsError::IOError(e))?
+                .is_file()
+            {
+                let file_name = entry.path().to_string_lossy().to_string();
+                let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
+                let source_file_size = entry
+                    .metadata()
+                    .await
+                    .map_err(|e| UtilsError::IOError(e))?
+                    .len();
+                let source_file_name = Path::new(&file_name)
+                    .strip_prefix(&config.source)
+                    .map_err(|e| UtilsError::StripPrefixError(e))?;
+                let source_file_name = source_file_name.to_string_lossy().to_string();
+                let target_file_name = format!("{}{}", &config.target, &source_file_name);
+                let target_file_size = target.get(&target_file_name).unwrap_or(&0);
 
-                    if source_file_size != *target_file_size as u64 {
-                        // dif found
-                        if source_file_size < chunk_size as u64 {
-                            tasks.spawn(upload_object(
-                                self.client.clone(),
-                                config.bucket.clone(),
-                                file_name,
-                                target_file_name,
-                                source_file_size,
-                            ))
-                        } else {
-                            tasks.spawn(upload_object_multipart(
-                                self.client.clone(),
-                                config.bucket.clone(),
-                                file_name,
-                                target_file_name,
-                                source_file_size,
-                                chunk_size as u64,
-                                config.max_chunks as u64,
-                            ))
-                        };
+                if source_file_size != *target_file_size as u64 {
+                    let task_info = UploadTaskInfo {
+                        client: self.client.clone(),
+                        bucket: config.bucket.clone(),
+                        local_path: file_name,
+                        s3_key: target_file_name,
+                        size: source_file_size,
+                        chunk_size: chunk_size as u64,
+                        max_chunks: config.max_chunks as u64,
+                    };
 
-                        if tasks.len() == config.workers {
-                            if let Some(res) = tasks.join_next().await {
-                                match res {
-                                    Ok(res) => {
-                                        if let Err(e) = res {
-                                            println!("could not upload object: {}", e);
-                                        }
-                                    }
-                                    Err(e) => println!("failed running task: {}", e),
-                                }
-                            }
-                        }
+                    if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
+                        eprintln!("Failed to spawn upload task: {}", e);
                     }
                 }
             }
         }
+
         while let Some(res) = tasks.join_next().await {
             match res {
                 Ok(res) => {
                     if let Err(e) = res {
-                        println!("could not upload object: {}", e);
+                        eprintln!("Upload task failed: {:?}", e);
                     }
                 }
-                Err(e) => println!("could not run task: {}", e),
+                Err(e) => eprintln!("Task panicked or was cancelled: {:?}", e),
             }
         }
         Ok(())
     }
+}
+
+pub struct UploadTaskInfo {
+    pub client: Client,
+    pub bucket: String,
+    pub local_path: String,
+    pub s3_key: String,
+    pub size: u64,
+    pub chunk_size: u64,
+    pub max_chunks: u64,
 }
 
 fn dif_calc(
@@ -256,6 +272,40 @@ fn dif_calc(
     } else {
         Some(dif)
     }
+}
+
+async fn spawn_upload_task(
+    tasks: &mut JoinSet<Result<(), AwsStorageError>>,
+    task_info: UploadTaskInfo,
+    max_workers: usize,
+) -> Result<(), SyncToolError> {
+    let UploadTaskInfo {
+        client,
+        bucket,
+        local_path,
+        s3_key,
+        size,
+        chunk_size,
+        max_chunks,
+    } = task_info;
+
+    if size < chunk_size {
+        tasks.spawn(upload_object(client, bucket, local_path, s3_key, size));
+    } else {
+        tasks.spawn(upload_object_multipart(
+            client, bucket, local_path, s3_key, size, chunk_size, max_chunks,
+        ));
+    }
+
+    // If we hit the max worker limit, wait for any one task to finish before continuing
+    if tasks.len() >= max_workers {
+        if let Some(res) = tasks.join_next().await {
+            if let Err(e) = res {
+                eprintln!("Upload task failed: {}", e);
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn get_object(

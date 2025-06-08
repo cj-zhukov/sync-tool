@@ -10,7 +10,6 @@ use aws_smithy_types::byte_stream::error::Error as AwsSmithyError;
 use color_eyre::eyre::Report;
 use thiserror::Error;
 
-
 #[derive(Error, Debug)]
 pub enum AwsStorageError {
     #[error("aws sdk s3 error")]
