@@ -8,6 +8,7 @@ pub const AWS_MAX_RETRIES: u32 = 10;
 pub const CONFIG_NAME: &str = "sync-tool.json";
 pub const DEFAULT_MODE: &str = "dif";
 pub const FILES_TO_IGNORE: [&str; 1] = [".DS_Store"];
+pub const RETRIES: usize = 5;
 
 pub static CONFIG: LazyLock<AppConfig> = LazyLock::new(|| {
     let config_file = File::with_name(CONFIG_NAME);
