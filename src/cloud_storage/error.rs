@@ -8,6 +8,7 @@ use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::operation::upload_part::UploadPartError;
 use aws_smithy_types::byte_stream::error::Error as AwsSmithyError;
 use color_eyre::eyre::Report;
+use indicatif::style::TemplateError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -38,6 +39,9 @@ pub enum AwsStorageError {
 
     #[error("byte stream aws smithy error")]
     ByteSreamError(#[from] AwsSmithyError),
+
+    #[error("template error")]
+    TemplateError(#[from] TemplateError),
 
     #[error("unexpected error")]
     UnexpectedError(#[source] Report),

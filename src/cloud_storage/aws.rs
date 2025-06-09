@@ -1,10 +1,17 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::time::Duration;
+
 use async_walkdir::{Filtering, WalkDir};
 use aws_sdk_s3::Client;
 use log::{error, info};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 
+use crate::cloud_storage::error::AwsStorageError;
+use crate::cloud_storage::tools::spawn_upload_task2;
 use crate::{
     cloud_storage::tools::{dif_calc, list_keys_stream, spawn_upload_task, UploadTaskInfo},
     domain::CloudStorage,
@@ -164,6 +171,13 @@ impl CloudStorage for AwsStorage {
                 .unwrap_or(Filtering::Continue)
         });
 
+        let uploaded_files = Arc::new(AtomicU64::new(0));
+        let uploaded_bytes = Arc::new(AtomicU64::new(0));
+        let pb = Arc::new(ProgressBar::new_spinner());
+        pb.set_style(ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed}] {msg}",
+        ).map_err(|e| AwsStorageError::TemplateError(e))?);
+        pb.enable_steady_tick(Duration::from_millis(100));
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MiB
 
@@ -204,7 +218,11 @@ impl CloudStorage for AwsStorage {
                         max_chunks: config.max_chunks as u64,
                     };
 
-                    if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
+                    let uploaded_files = Arc::clone(&uploaded_files);
+                    let uploaded_bytes = Arc::clone(&uploaded_bytes);
+                    let pb = Arc::clone(&pb);
+
+                    if let Err(e) = spawn_upload_task2(&mut tasks, task_info, config.workers, uploaded_files, uploaded_bytes, pb).await {
                         error!("Failed to spawn upload task: {:?}", e);
                     }
                 }

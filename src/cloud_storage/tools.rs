@@ -6,8 +6,9 @@ use aws_sdk_s3::{
 };
 use aws_smithy_types::byte_stream::Length;
 use color_eyre::Report;
+use indicatif::ProgressBar;
 use log::{error, info};
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, sync::{atomic::{AtomicU64, Ordering}, Arc}, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
 
 use crate::{
@@ -148,6 +149,77 @@ pub async fn spawn_upload_task(
             .await
         });
     }
+
+    // If we hit the max worker limit, wait for any one task to finish before continuing
+    if tasks.len() >= max_workers {
+        if let Some(res) = tasks.join_next().await {
+            if let Err(e) = res {
+                error!("Upload task failed: {}", e);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn spawn_upload_task2(
+    tasks: &mut JoinSet<Result<(), AwsStorageError>>,
+    task_info: UploadTaskInfo,
+    max_workers: usize,
+    uploaded_files: Arc<AtomicU64>,
+    uploaded_bytes: Arc<AtomicU64>,
+    pb: Arc<ProgressBar>,
+) -> Result<(), SyncToolError> {
+    let UploadTaskInfo {
+        client,
+        bucket,
+        local_path,
+        s3_key,
+        size,
+        chunk_size,
+        max_chunks,
+    } = task_info;
+
+    let update_progress = move || {
+        uploaded_files.fetch_add(1, Ordering::Relaxed);
+        uploaded_bytes.fetch_add(size, Ordering::Relaxed);
+        let count = uploaded_files.load(Ordering::Relaxed);
+        let bytes = uploaded_bytes.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+        pb.set_message(format!("Uploaded: {count} files | {bytes:.2} MB"));
+    };
+
+    let task = async move {
+        let result = if size < chunk_size {
+            retry(move || {
+                upload_object(
+                    client.clone(),
+                    bucket.clone(),
+                    local_path.clone(),
+                    s3_key.clone(),
+                    size,
+                )
+            }, RETRIES).await
+        } else {
+            retry(move || {
+                upload_object_multipart(
+                    client.clone(),
+                    bucket.clone(),
+                    local_path.clone(),
+                    s3_key.clone(),
+                    size,
+                    chunk_size,
+                    max_chunks,
+                )
+            }, RETRIES).await
+        };
+
+        if result.is_ok() {
+            update_progress();
+        }
+
+        result
+    };
+
+    tasks.spawn(task);
 
     // If we hit the max worker limit, wait for any one task to finish before continuing
     if tasks.len() >= max_workers {
