@@ -5,6 +5,8 @@ pub mod utils;
 
 pub use error::SyncToolError;
 
+use log::error;
+
 /// Mode has 4 options:
 /// dif - calculate and show dif in file name and size
 /// upload - simple upload files without checking target file names and sizes
@@ -36,7 +38,7 @@ impl Mode {
             "sync" | "Sync" | "SYNC" => Some(Self::Sync),
             "show" | "Show" | "SHOW" => Some(Self::Show),
             _ => {
-                println!(
+                error!(
                     "unknown mode provided: {} valid: dif, upload, sync, show",
                     mode
                 );

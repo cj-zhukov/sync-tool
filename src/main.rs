@@ -1,16 +1,19 @@
 use std::{env, time::Instant};
 
 use color_eyre::Result;
+use log::info;
 
 use sync_tool::cloud_storage::aws::AwsStorage;
 use sync_tool::domain::CloudStorage;
 use sync_tool::utils::aws::get_aws_client;
 use sync_tool::utils::constants::*;
+use sync_tool::utils::logger::init_logger;
 use sync_tool::Mode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+    init_logger();
 
     let now = Instant::now();
     let mut args = env::args();
@@ -23,7 +26,7 @@ async fn main() -> Result<()> {
     if let Some(mode) = Mode::new(&mode) {
         let source = config.source.to_string();
         let target = format!("s3://{}/{}", &config.bucket, &config.target);
-        println!(
+        info!(
             "sync-tool started with mode: {} for source: {} target: {}",
             mode.as_ref(),
             &source,
@@ -35,7 +38,7 @@ async fn main() -> Result<()> {
             Mode::Sync => aws_storage.sync(&config).await?,
             Mode::Show => aws_storage.show(&config).await?,
         }
-        println!(
+        info!(
             "sync-tool finished with mode: {} for source: {} target: {} elapsed: {:.2?}",
             mode.as_ref(),
             &source,

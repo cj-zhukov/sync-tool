@@ -1,5 +1,6 @@
 use async_walkdir::{Filtering, WalkDir};
 use aws_sdk_s3::Client;
+use log::{error, info};
 use std::path::Path;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
@@ -47,8 +48,8 @@ impl CloudStorage for AwsStorage {
 
         let dif = dif_calc(&config, &source, &target);
         match dif {
-            Some(dif) => println!("dif found: {:?}", dif),
-            None => println!("no dif found"),
+            Some(dif) => info!("dif found: {:?}", dif),
+            None => info!("no dif found"),
         };
         Ok(())
     }
@@ -69,8 +70,8 @@ impl CloudStorage for AwsStorage {
                 .await
                 .map_err(|e| UtilsError::TokioJoinError(e))??,
         );
-        println!("source: {:?}", source);
-        println!("target: {:?}", target);
+        info!("source: {:?}", source);
+        info!("target: {:?}", target);
         Ok(())
     }
 
@@ -126,7 +127,7 @@ impl CloudStorage for AwsStorage {
                 };
 
                 if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
-                    eprintln!("Failed to spawn upload task: {:?}", e);
+                    error!("Failed to spawn upload task: {:?}", e);
                 }
             }
         }
@@ -135,10 +136,10 @@ impl CloudStorage for AwsStorage {
             match res {
                 Ok(res) => {
                     if let Err(e) = res {
-                        eprintln!("Upload task failed: {:?}", e);
+                        error!("Upload task failed: {:?}", e);
                     }
                 }
-                Err(e) => eprintln!("Task panicked or was cancelled: {:?}", e),
+                Err(e) => error!("Task panicked or was cancelled: {:?}", e),
             }
         }
         Ok(())
@@ -204,7 +205,7 @@ impl CloudStorage for AwsStorage {
                     };
 
                     if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
-                        eprintln!("Failed to spawn upload task: {:?}", e);
+                        error!("Failed to spawn upload task: {:?}", e);
                     }
                 }
             }
@@ -214,10 +215,10 @@ impl CloudStorage for AwsStorage {
             match res {
                 Ok(res) => {
                     if let Err(e) = res {
-                        eprintln!("Upload task failed: {:?}", e);
+                        error!("Upload task failed: {:?}", e);
                     }
                 }
-                Err(e) => eprintln!("Task panicked or was cancelled: {:?}", e),
+                Err(e) => error!("Task panicked or was cancelled: {:?}", e),
             }
         }
         Ok(())

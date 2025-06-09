@@ -6,6 +6,7 @@ use aws_sdk_s3::{
 };
 use aws_smithy_types::byte_stream::Length;
 use color_eyre::Report;
+use log::{error, info};
 use std::{collections::HashMap, path::Path, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
 
@@ -152,7 +153,7 @@ pub async fn spawn_upload_task(
     if tasks.len() >= max_workers {
         if let Some(res) = tasks.join_next().await {
             if let Err(e) = res {
-                eprintln!("Upload task failed: {}", e);
+                error!("Upload task failed: {}", e);
             }
         }
     }
@@ -176,7 +177,7 @@ where
                 if attempts > retries {
                     return Err(e);
                 }
-                eprintln!(
+                error!(
                     "Retry {}/{} failed: {:?}. Retrying...",
                     attempts, retries, e
                 );
@@ -195,7 +196,7 @@ async fn upload_object(
     file_size: u64,
 ) -> Result<(), AwsStorageError> {
     let body = ByteStream::from_path(Path::new(&file_name)).await?;
-    println!("Uploading file: {}", file_name);
+    info!("Uploading file: {}", file_name);
 
     client
         .put_object()
@@ -205,7 +206,7 @@ async fn upload_object(
         .send()
         .await?;
 
-    println!("Uploaded file: {}", file_name);
+    info!("Uploaded file: {}", file_name);
 
     let data = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
@@ -228,7 +229,7 @@ async fn upload_object_multipart(
     chunk_size: u64,
     max_chunks: u64,
 ) -> Result<(), AwsStorageError> {
-    println!("Uploading file: {}", file_name);
+    info!("Uploading file: {}", file_name);
 
     let multipart_upload_res = client
         .create_multipart_upload()
@@ -305,7 +306,7 @@ async fn upload_object_multipart(
         .send()
         .await?;
 
-    println!("Uploaded file: {}", file_name);
+    info!("Uploaded file: {}", file_name);
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?; //#TODO think about adding a parameter because can be expensive
     let data_length = data.content_length().unwrap_or(0) as u64;
