@@ -11,9 +11,8 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 
 use crate::cloud_storage::error::AwsStorageError;
-use crate::cloud_storage::tools::spawn_upload_task2;
 use crate::{
-    cloud_storage::tools::{dif_calc, list_keys_stream, spawn_upload_task, UploadTaskInfo},
+    cloud_storage::tools::{dif_calc, list_keys, spawn_upload_task, UploadTaskInfo},
     domain::CloudStorage,
     utils::{
         config::AppConfig,
@@ -39,7 +38,7 @@ impl CloudStorage for AwsStorage {
     /// Calculate and show dif
     async fn dif(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let source_task = tokio::spawn(files_walker(config.source.clone()));
-        let target_task = tokio::spawn(list_keys_stream(
+        let target_task = tokio::spawn(list_keys(
             self.client.clone(),
             config.bucket.clone(),
             config.target.clone(),
@@ -64,7 +63,7 @@ impl CloudStorage for AwsStorage {
     /// Show files from source and target folders
     async fn show(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let source_task = tokio::spawn(files_walker(config.source.clone()));
-        let target_task = tokio::spawn(list_keys_stream(
+        let target_task = tokio::spawn(list_keys(
             self.client.clone(),
             config.bucket.clone(),
             config.target.clone(),
@@ -94,6 +93,13 @@ impl CloudStorage for AwsStorage {
                 .unwrap_or(Filtering::Continue)
         });
 
+        let uploaded_files = Arc::new(AtomicU64::new(0));
+        let uploaded_bytes = Arc::new(AtomicU64::new(0));
+        let pb = Arc::new(ProgressBar::new_spinner());
+        pb.set_style(ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed}] {msg}",
+        ).map_err(|e| AwsStorageError::TemplateError(e))?);
+        pb.enable_steady_tick(Duration::from_millis(100));
         let mut tasks = JoinSet::new();
         let chunk_size = config.chunk_size * 1024 * 1024; // MB
 
@@ -133,7 +139,11 @@ impl CloudStorage for AwsStorage {
                     max_chunks: config.max_chunks as u64,
                 };
 
-                if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers).await {
+                let uploaded_files = Arc::clone(&uploaded_files);
+                let uploaded_bytes = Arc::clone(&uploaded_bytes);
+                let pb = Arc::clone(&pb);
+
+                if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers, uploaded_files, uploaded_bytes, pb).await {
                     error!("Failed to spawn upload task: {:?}", e);
                 }
             }
@@ -154,7 +164,7 @@ impl CloudStorage for AwsStorage {
 
     /// Sync files from source to target with checking file name and size
     async fn sync(&self, config: &AppConfig) -> Result<(), SyncToolError> {
-        let target = list_keys_stream(
+        let target = list_keys(
             self.client.clone(),
             config.bucket.clone(),
             config.target.clone(),
@@ -222,7 +232,7 @@ impl CloudStorage for AwsStorage {
                     let uploaded_bytes = Arc::clone(&uploaded_bytes);
                     let pb = Arc::clone(&pb);
 
-                    if let Err(e) = spawn_upload_task2(&mut tasks, task_info, config.workers, uploaded_files, uploaded_bytes, pb).await {
+                    if let Err(e) = spawn_upload_task(&mut tasks, task_info, config.workers, uploaded_files, uploaded_bytes, pb).await {
                         error!("Failed to spawn upload task: {:?}", e);
                     }
                 }

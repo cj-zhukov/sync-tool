@@ -41,7 +41,7 @@ pub async fn get_object(
         .await?)
 }
 
-pub async fn list_keys_stream(
+pub async fn list_keys(
     client: Client,
     bucket: String,
     prefix: String,
@@ -100,68 +100,6 @@ pub fn dif_calc(
 
 /// Based on file size run upload
 pub async fn spawn_upload_task(
-    tasks: &mut JoinSet<Result<(), AwsStorageError>>,
-    task_info: UploadTaskInfo,
-    max_workers: usize,
-) -> Result<(), SyncToolError> {
-    let UploadTaskInfo {
-        client,
-        bucket,
-        local_path,
-        s3_key,
-        size,
-        chunk_size,
-        max_chunks,
-    } = task_info;
-
-    if size < chunk_size {
-        tasks.spawn(async move {
-            retry(
-                move || {
-                    upload_object(
-                        client.clone(),
-                        bucket.clone(),
-                        local_path.clone(),
-                        s3_key.clone(),
-                        size,
-                    )
-                },
-                RETRIES,
-            )
-            .await
-        });
-    } else {
-        tasks.spawn(async move {
-            retry(
-                move || {
-                    upload_object_multipart(
-                        client.clone(),
-                        bucket.clone(),
-                        local_path.clone(),
-                        s3_key.clone(),
-                        size,
-                        chunk_size,
-                        max_chunks,
-                    )
-                },
-                RETRIES,
-            )
-            .await
-        });
-    }
-
-    // If we hit the max worker limit, wait for any one task to finish before continuing
-    if tasks.len() >= max_workers {
-        if let Some(res) = tasks.join_next().await {
-            if let Err(e) = res {
-                error!("Upload task failed: {}", e);
-            }
-        }
-    }
-    Ok(())
-}
-
-pub async fn spawn_upload_task2(
     tasks: &mut JoinSet<Result<(), AwsStorageError>>,
     task_info: UploadTaskInfo,
     max_workers: usize,
@@ -287,7 +225,6 @@ async fn upload_object(
             "Source and target data sizes after upload don't match",
         )));
     }
-
     Ok(())
 }
 
