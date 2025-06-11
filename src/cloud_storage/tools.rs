@@ -6,10 +6,9 @@ use aws_sdk_s3::{
 };
 use aws_smithy_types::byte_stream::Length;
 use color_eyre::Report;
-use indicatif::ProgressBar;
 use log::{error, info};
-use std::{collections::HashMap, path::Path, sync::{atomic::{AtomicU64, Ordering}, Arc}, time::Duration};
-use tokio::{task::JoinSet, time::sleep};
+use std::{collections::HashMap, path::Path, time::Duration};
+use tokio::time::sleep;
 
 use crate::{
     cloud_storage::error::AwsStorageError,
@@ -98,15 +97,7 @@ pub fn dif_calc(
     }
 }
 
-/// Based on file size run upload
-pub async fn spawn_upload_task(
-    tasks: &mut JoinSet<Result<(), AwsStorageError>>,
-    task_info: UploadTaskInfo,
-    max_workers: usize,
-    uploaded_files: Arc<AtomicU64>,
-    uploaded_bytes: Arc<AtomicU64>,
-    pb: Arc<ProgressBar>,
-) -> Result<(), SyncToolError> {
+pub async fn spawn_upload_task(task_info: UploadTaskInfo) -> Result<(), SyncToolError> {
     let UploadTaskInfo {
         client,
         bucket,
@@ -117,17 +108,9 @@ pub async fn spawn_upload_task(
         max_chunks,
     } = task_info;
 
-    let update_progress = move || {
-        uploaded_files.fetch_add(1, Ordering::Relaxed);
-        uploaded_bytes.fetch_add(size, Ordering::Relaxed);
-        let count = uploaded_files.load(Ordering::Relaxed);
-        let bytes = uploaded_bytes.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
-        pb.set_message(format!("Uploaded: {count} files | {bytes:.2} MB"));
-    };
-
-    let task = async move {
-        let result = if size < chunk_size {
-            retry(move || {
+    if size < chunk_size {
+        retry(
+            move || {
                 upload_object(
                     client.clone(),
                     bucket.clone(),
@@ -135,9 +118,13 @@ pub async fn spawn_upload_task(
                     s3_key.clone(),
                     size,
                 )
-            }, RETRIES).await
-        } else {
-            retry(move || {
+            },
+            RETRIES,
+        )
+        .await
+    } else {
+        retry(
+            move || {
                 upload_object_multipart(
                     client.clone(),
                     bucket.clone(),
@@ -147,27 +134,11 @@ pub async fn spawn_upload_task(
                     chunk_size,
                     max_chunks,
                 )
-            }, RETRIES).await
-        };
-
-        if result.is_ok() {
-            update_progress();
-        }
-
-        result
-    };
-
-    tasks.spawn(task);
-
-    // If we hit the max worker limit, wait for any one task to finish before continuing
-    if tasks.len() >= max_workers {
-        if let Some(res) = tasks.join_next().await {
-            if let Err(e) = res {
-                error!("Upload task failed: {}", e);
-            }
-        }
+            },
+            RETRIES,
+        )
+        .await
     }
-    Ok(())
 }
 
 /// Retry an async operation `op` up to `retries` times.
@@ -204,9 +175,11 @@ async fn upload_object(
     file_name: String,
     key: String,
     file_size: u64,
-) -> Result<(), AwsStorageError> {
-    let body = ByteStream::from_path(Path::new(&file_name)).await?;
+) -> Result<(), SyncToolError> {
     info!("Uploading file: {}", file_name);
+    let body = ByteStream::from_path(Path::new(&file_name))
+        .await
+        .map_err(AwsStorageError::ByteSreamError)?;
 
     client
         .put_object()
@@ -214,17 +187,17 @@ async fn upload_object(
         .key(&key)
         .body(body)
         .send()
-        .await?;
-
-    info!("Uploaded file: {}", file_name);
+        .await
+        .map_err(AwsStorageError::PutObjectError)?;
 
     let data = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(
+        return Err(SyncToolError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
+    info!("Uploaded file: {}", file_name);
     Ok(())
 }
 
@@ -237,7 +210,7 @@ async fn upload_object_multipart(
     file_size: u64,
     chunk_size: u64,
     max_chunks: u64,
-) -> Result<(), AwsStorageError> {
+) -> Result<(), SyncToolError> {
     info!("Uploading file: {}", file_name);
 
     let multipart_upload_res = client
@@ -245,7 +218,8 @@ async fn upload_object_multipart(
         .bucket(&bucket_name)
         .key(&key)
         .send()
-        .await?;
+        .await
+        .map_err(AwsStorageError::CreateMultipartError)?;
 
     let upload_id = multipart_upload_res.upload_id().unwrap_or_default();
     let path = Path::new(&file_name);
@@ -257,13 +231,13 @@ async fn upload_object_multipart(
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
             "Bad file size for: {}",
             file_name
         ))));
     }
     if chunk_count > max_chunks {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
             "Too many chunks file: {}. Try increasing your chunk size",
             file_name
         ))));
@@ -281,7 +255,8 @@ async fn upload_object_multipart(
             .offset(chunk_index * chunk_size)
             .length(Length::Exact(this_chunk))
             .build()
-            .await?;
+            .await
+            .map_err(AwsStorageError::ByteSreamError)?;
 
         let part_number = (chunk_index as i32) + 1;
         let upload_part_res = client
@@ -292,7 +267,8 @@ async fn upload_object_multipart(
             .body(stream)
             .part_number(part_number)
             .send()
-            .await?;
+            .await
+            .map_err(AwsStorageError::UploadPartError)?;
 
         upload_parts.push(
             CompletedPart::builder()
@@ -313,16 +289,16 @@ async fn upload_object_multipart(
         .multipart_upload(completed_multipart_upload)
         .upload_id(upload_id)
         .send()
-        .await?;
-
-    info!("Uploaded file: {}", file_name);
+        .await
+        .map_err(AwsStorageError::CompleteMultipartError)?;
 
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?; //#TODO think about adding a parameter because can be expensive
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(
+        return Err(SyncToolError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
+    info!("Uploaded file: {}", file_name);
     Ok(())
 }
