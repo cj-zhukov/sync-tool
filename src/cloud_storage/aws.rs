@@ -65,7 +65,7 @@ impl CloudStorage for AwsStorage {
                     make_s3_key(Path::new(&config.source), &full_path, &config.target)?;
                 let target_file_size = target.get(&target_file_name).unwrap_or(&0);
                 if source_file_size != *target_file_size as u64 {
-                    files_to_upload.push(normalize_path(full_path));
+                    files_to_upload.push((normalize_path(full_path), source_file_size));
                 }
             }
         }
@@ -74,9 +74,14 @@ impl CloudStorage for AwsStorage {
             info!("All files are already synced. No uploads needed.");
         } else {
             for file in files_to_upload.iter() {
-                info!("Found file to upload: {}", file);
+                let file_name = &file.0;
+                let bytes_mb = file.1 as f64 / (1024.0 * 1024.0);
+                info!("Found file to upload: {file_name} | {bytes_mb:.2} MB");
             }
-            info!("Found: {} files to upload", files_to_upload.len());
+            let files_to_upload_count = files_to_upload.len();
+            let bytes_to_upload = files_to_upload.iter().fold(0, |acc, file| acc +  file.1);
+            let bytes_to_upload = bytes_to_upload as f64 / (1024.0 * 1024.0);
+            info!("Found to upload: {files_to_upload_count} files | {bytes_to_upload:.2} MB");
         }
         Ok(())
     }
