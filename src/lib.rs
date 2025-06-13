@@ -8,7 +8,7 @@ pub use error::SyncToolError;
 use log::error;
 
 /// Mode has 3 options:
-/// dif - dry-run, calculate and show dif in file name and size
+/// dif - dry-run, calculate and show dif
 /// upload - simple upload files without checking target file names and sizes
 /// sync - smart check file name and size and upload
 pub enum Mode {

@@ -19,10 +19,15 @@ Use the package manager cargo or docker to install sync-tool.
 ## Max file size
 chunk_size (MiB) * max_chunks (int) = max file size
 
+## Modes
+- dif - (default mode, dry-run), calculate and show dif
+- upload - upload files without checking target file names and sizes (files in target if exist will be overwritten)
+- sync - smart check file name and size before uploading
+
 ## Usage
 ```bash
 # sync-tool mode
-# mode: app mode dif | show | upload | sync
+# mode: app mode dif (default) | upload | sync
 # config-name: sync-tool.json must exist with the binary
 ./sync-tool sync
 ```
