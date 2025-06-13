@@ -5,10 +5,10 @@ use config::{Config, File};
 use super::config::AppConfig;
 
 pub const AWS_MAX_RETRIES: u32 = 10;
-pub const CONFIG_NAME: &str = "sync-tool.json";
-pub const DEFAULT_MODE: &str = "dif";
+pub const CONFIG_NAME: &str = "sync-tool.json"; // config file must exist
+pub const DEFAULT_MODE: &str = "dif"; // dry-run is default mode
 pub const FILES_TO_IGNORE: [&str; 1] = [".DS_Store"];
-pub const RETRIES: usize = 5;
+pub const RETRIES: usize = 5; // how many times try to reupload file
 
 pub static CONFIG: LazyLock<AppConfig> = LazyLock::new(|| {
     let config_file = File::with_name(CONFIG_NAME);

@@ -32,12 +32,13 @@ async fn main() -> Result<()> {
             &source,
             &target
         );
+
         match mode {
             Mode::Dif => aws_storage.dif(&config).await?,
             Mode::Upload => aws_storage.upload(&config).await?,
             Mode::Sync => aws_storage.sync(&config).await?,
-            Mode::Show => aws_storage.show(&config).await?,
         }
+
         info!(
             "sync-tool finished with mode: {} for source: {} target: {} elapsed: {:.2?}",
             mode.as_ref(),
@@ -46,6 +47,5 @@ async fn main() -> Result<()> {
             now.elapsed()
         );
     }
-
     Ok(())
 }

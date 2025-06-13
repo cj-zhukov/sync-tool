@@ -7,20 +7,19 @@ use aws_sdk_s3::{
 use aws_smithy_types::byte_stream::Length;
 use color_eyre::Report;
 use log::{error, info};
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 use tokio::time::sleep;
 
 use crate::{
-    cloud_storage::error::AwsStorageError,
-    utils::{config::AppConfig, constants::RETRIES},
-    SyncToolError,
+    cloud_storage::{error::AwsStorageError, path_conversions::normalize_path},
+    utils::constants::RETRIES,
 };
 
 #[derive(Debug)]
 pub struct UploadTaskInfo {
     pub client: Client,
     pub bucket: String,
-    pub local_path: String,
+    pub local_path: PathBuf,
     pub s3_key: String,
     pub size: u64,
     pub chunk_size: u64,
@@ -41,9 +40,9 @@ pub async fn get_object(
 }
 
 pub async fn list_keys(
-    client: Client,
-    bucket: String,
-    prefix: String,
+    client: &Client,
+    bucket: &str,
+    prefix: &str,
 ) -> Result<HashMap<String, i64>, AwsStorageError> {
     let mut stream = client
         .list_objects_v2()
@@ -65,39 +64,7 @@ pub async fn list_keys(
     Ok(files)
 }
 
-pub fn dif_calc(
-    config: &AppConfig,
-    source: &HashMap<String, i64>,
-    target: &HashMap<String, i64>,
-) -> Option<HashMap<String, i64>> {
-    let mut dif: HashMap<String, i64> = HashMap::new();
-    for (k, v) in source.iter() {
-        let source_f_name = k
-            .strip_prefix(&config.source)
-            .unwrap_or("no_file_name")
-            .to_string();
-        let source_f_size = *v;
-        let target_f_name = format!("{}{}", &config.target, &source_f_name);
-        match target.get(&target_f_name) {
-            Some(target_f_size) => {
-                if source_f_size != *target_f_size {
-                    dif.insert(source_f_name.clone(), source_f_size);
-                }
-            }
-            None => {
-                dif.insert(source_f_name.clone(), source_f_size);
-            }
-        }
-    }
-
-    if dif.is_empty() {
-        None
-    } else {
-        Some(dif)
-    }
-}
-
-pub async fn spawn_upload_task(task_info: UploadTaskInfo) -> Result<(), SyncToolError> {
+pub async fn spawn_upload_task(task_info: UploadTaskInfo) -> Result<(), AwsStorageError> {
     let UploadTaskInfo {
         client,
         bucket,
@@ -172,12 +139,12 @@ where
 async fn upload_object(
     client: Client,
     bucket_name: String,
-    file_name: String,
+    file_name: PathBuf,
     key: String,
     file_size: u64,
-) -> Result<(), SyncToolError> {
-    info!("Uploading file: {}", file_name);
-    let body = ByteStream::from_path(Path::new(&file_name))
+) -> Result<(), AwsStorageError> {
+    info!("Uploading file: {}", normalize_path(&file_name));
+    let body = ByteStream::from_path(&file_name)
         .await
         .map_err(AwsStorageError::ByteSreamError)?;
 
@@ -193,11 +160,11 @@ async fn upload_object(
     let data = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
-    info!("Uploaded file: {}", file_name);
+    info!("Uploaded file: {}", normalize_path(file_name));
     Ok(())
 }
 
@@ -205,13 +172,13 @@ async fn upload_object(
 async fn upload_object_multipart(
     client: Client,
     bucket_name: String,
-    file_name: String,
+    file_name: PathBuf,
     key: String,
     file_size: u64,
     chunk_size: u64,
     max_chunks: u64,
-) -> Result<(), SyncToolError> {
-    info!("Uploading file: {}", file_name);
+) -> Result<(), AwsStorageError> {
+    info!("Uploading file: {}", normalize_path(&file_name));
 
     let multipart_upload_res = client
         .create_multipart_upload()
@@ -222,7 +189,6 @@ async fn upload_object_multipart(
         .map_err(AwsStorageError::CreateMultipartError)?;
 
     let upload_id = multipart_upload_res.upload_id().unwrap_or_default();
-    let path = Path::new(&file_name);
     let mut chunk_count = (file_size / chunk_size) + 1;
     let mut size_of_last_chunk = file_size % chunk_size;
 
@@ -231,15 +197,15 @@ async fn upload_object_multipart(
         chunk_count -= 1;
     }
     if file_size == 0 {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
             "Bad file size for: {}",
-            file_name
+            normalize_path(file_name)
         ))));
     }
     if chunk_count > max_chunks {
-        return Err(SyncToolError::UnexpectedError(Report::msg(format!(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
             "Too many chunks file: {}. Try increasing your chunk size",
-            file_name
+            normalize_path(file_name)
         ))));
     }
 
@@ -251,7 +217,7 @@ async fn upload_object_multipart(
             chunk_size
         };
         let stream = ByteStream::read_from()
-            .path(path)
+            .path(&file_name)
             .offset(chunk_index * chunk_size)
             .length(Length::Exact(this_chunk))
             .build()
@@ -295,10 +261,10 @@ async fn upload_object_multipart(
     let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?; //#TODO think about adding a parameter because can be expensive
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
-        return Err(SyncToolError::UnexpectedError(Report::msg(
+        return Err(AwsStorageError::UnexpectedError(Report::msg(
             "Source and target data sizes after upload don't match",
         )));
     }
-    info!("Uploaded file: {}", file_name);
+    info!("Uploaded file: {}", normalize_path(file_name));
     Ok(())
 }

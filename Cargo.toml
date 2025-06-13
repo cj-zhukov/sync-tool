@@ -16,8 +16,12 @@ config = "0.15"
 color-eyre = "0.6"
 log = "0.4"
 env_logger = "0.11"
+path-slash = "0.2"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 thiserror = "2"
+
+[dev-dependencies]
+rstest = "0.24"

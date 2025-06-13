@@ -7,16 +7,14 @@ pub use error::SyncToolError;
 
 use log::error;
 
-/// Mode has 4 options:
-/// dif - calculate and show dif in file name and size
+/// Mode has 3 options:
+/// dif - dry-run, calculate and show dif in file name and size
 /// upload - simple upload files without checking target file names and sizes
 /// sync - smart check file name and size and upload
-/// show - print source and target files
 pub enum Mode {
     Dif,
     Upload,
     Sync,
-    Show,
 }
 
 impl AsRef<str> for Mode {
@@ -25,7 +23,6 @@ impl AsRef<str> for Mode {
             Self::Dif => "dif",
             Self::Upload => "upload",
             Self::Sync => "sync",
-            Self::Show => "show",
         }
     }
 }
@@ -36,12 +33,8 @@ impl Mode {
             "dif" | "Dif" | "DIF" => Some(Self::Dif),
             "upload" | "Upload" | "UPLOAD" => Some(Self::Upload),
             "sync" | "Sync" | "SYNC" => Some(Self::Sync),
-            "show" | "Show" | "SHOW" => Some(Self::Show),
             _ => {
-                error!(
-                    "unknown mode provided: {} valid: dif, upload, sync, show",
-                    mode
-                );
+                error!("unknown mode provided: {} valid: dif, upload, sync", mode);
                 None
             }
         }

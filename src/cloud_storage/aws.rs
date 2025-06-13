@@ -9,14 +9,12 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 
 use crate::{
-    cloud_storage::tools::{dif_calc, list_keys, spawn_upload_task, UploadTaskInfo},
-    domain::CloudStorage,
-    utils::{
-        config::AppConfig,
-        constants::FILES_TO_IGNORE,
-        error::UtilsError,
-        tools::{files_walker, sanitize_file_path},
+    cloud_storage::{
+        path_conversions::{make_s3_key, normalize_path},
+        tools::{list_keys, spawn_upload_task, UploadTaskInfo},
     },
+    domain::CloudStorage,
+    utils::{config::AppConfig, constants::FILES_TO_IGNORE, error::UtilsError},
     SyncToolError,
 };
 
@@ -32,45 +30,59 @@ impl AwsStorage {
 
 #[async_trait::async_trait]
 impl CloudStorage for AwsStorage {
-    /// Calculate and show dif
+    /// Calculate and show dif (dry-run)
     async fn dif(&self, config: &AppConfig) -> Result<(), SyncToolError> {
-        let source_task = tokio::spawn(files_walker(config.source.clone()));
-        let target_task = tokio::spawn(list_keys(
-            self.client.clone(),
-            config.bucket.clone(),
-            config.target.clone(),
-        ));
-        let (source, target) = (
-            source_task.await.map_err(UtilsError::TokioJoinError)??,
-            target_task.await.map_err(UtilsError::TokioJoinError)??,
-        );
+        let target = list_keys(&self.client, &config.bucket, &config.target).await?;
 
-        let dif = dif_calc(config, &source, &target);
-        match dif {
-            Some(dif) => info!("dif found: {:?}", dif),
-            None => info!("no dif found"),
-        };
+        let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
+            if let Some(true) = entry.path().file_name().map(|f| {
+                FILES_TO_IGNORE
+                    .iter()
+                    .any(|ignore| f.to_string_lossy() == *ignore)
+            }) {
+                return Filtering::IgnoreDir;
+            }
+            Filtering::Continue
+        });
+
+        let mut files_to_upload = Vec::new();
+
+        while let Some(entry) = entries
+            .next()
+            .await
+            .transpose()
+            .map_err(UtilsError::IOError)?
+        {
+            if entry
+                .file_type()
+                .await
+                .map_err(UtilsError::IOError)?
+                .is_file()
+            {
+                let full_path = entry.path();
+                let source_file_size = entry.metadata().await.map_err(UtilsError::IOError)?.len();
+                let target_file_name =
+                    make_s3_key(&Path::new(&config.source), &full_path, &config.target)?;
+                let target_file_size = target.get(&target_file_name).unwrap_or(&0);
+                if source_file_size != *target_file_size as u64 {
+                    files_to_upload.push(normalize_path(full_path));
+                }
+            }
+        }
+
+        if files_to_upload.is_empty() {
+            info!("All files are already synced. No uploads needed.");
+        } else {
+            for file in files_to_upload.iter() {
+                info!("Found file to upload: {}", file);
+            }
+            info!("Found: {} files to upload", files_to_upload.len());
+        }
         Ok(())
     }
 
-    /// Show files from source and target folders
-    async fn show(&self, config: &AppConfig) -> Result<(), SyncToolError> {
-        let source_task = tokio::spawn(files_walker(config.source.clone()));
-        let target_task = tokio::spawn(list_keys(
-            self.client.clone(),
-            config.bucket.clone(),
-            config.target.clone(),
-        ));
-        let (source, target) = (
-            source_task.await.map_err(UtilsError::TokioJoinError)??,
-            target_task.await.map_err(UtilsError::TokioJoinError)??,
-        );
-        info!("source: {:?}", source);
-        info!("target: {:?}", target);
-        Ok(())
-    }
-
-    /// Upload files from source to target without checking file name and size
+    /// Upload files from source to target without checking file name and size,
+    /// so target files if exist will be overwritten
     async fn upload(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
             if let Some(true) = entry.path().file_name().map(|f| {
@@ -99,19 +111,15 @@ impl CloudStorage for AwsStorage {
                 .map_err(UtilsError::IOError)?
                 .is_file()
             {
-                let file_name = entry.path().to_string_lossy().to_string();
-                let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
+                let full_path = entry.path();
                 let source_file_size = entry.metadata().await.map_err(UtilsError::IOError)?.len();
-                let source_file_name = Path::new(&file_name)
-                    .strip_prefix(&config.source)
-                    .map_err(UtilsError::StripPrefixError)?;
-                let source_file_name = source_file_name.to_string_lossy().to_string();
-                let target_file_name = format!("{}{}", &config.target, &source_file_name);
+                let target_file_name =
+                    make_s3_key(&Path::new(&config.source), &full_path, &config.target)?;
 
                 let task_info = UploadTaskInfo {
                     client: self.client.clone(),
                     bucket: config.bucket.clone(),
-                    local_path: file_name.clone(),
+                    local_path: full_path.clone(),
                     s3_key: target_file_name,
                     size: source_file_size,
                     chunk_size: chunk_size as u64,
@@ -122,14 +130,15 @@ impl CloudStorage for AwsStorage {
                     .acquire_owned()
                     .await
                     .map_err(|e| SyncToolError::UnexpectedError(e.into()))?;
+
                 tasks.spawn(async move {
                     let _permit = permit;
                     match spawn_upload_task(task_info).await {
                         Ok(_) => Ok(source_file_size),
                         Err(e) => Err(e),
                     }
-                    .map(|bytes| (file_name.clone(), bytes))
-                    .map_err(|err| (file_name, err))
+                    .map(|bytes| (normalize_path(&full_path), bytes))
+                    .map_err(|err| (normalize_path(&full_path), err))
                 });
             }
         }
@@ -157,26 +166,25 @@ impl CloudStorage for AwsStorage {
             }
         }
 
-        if !failed_uploads.is_empty() {
-            error!("{} files failed to upload:", failed_uploads.len());
-            for file in failed_uploads.iter() {
-                error!(" - {}", file);
-            }
-        } else {
+        if uploaded_files_count > 0 {
             let bytes_mb = uploaded_bytes_total as f64 / (1024.0 * 1024.0);
             info!("Uploaded: {uploaded_files_count} files | {bytes_mb:.2} MB");
+        }
+
+        if !failed_uploads.is_empty() {
+            error!("Failed to upload: {} files", failed_uploads.len());
+            for file in failed_uploads.iter() {
+                error!("Failed to upload file: {}", file);
+            }
+        } else if uploaded_files_count == 0 {
+            info!("All files are already synced. No uploads needed.");
         }
         Ok(())
     }
 
-    /// Sync files from source to target with checking file name and size
+    /// Sync files between source and target using file name and size
     async fn sync(&self, config: &AppConfig) -> Result<(), SyncToolError> {
-        let target = list_keys(
-            self.client.clone(),
-            config.bucket.clone(),
-            config.target.clone(),
-        )
-        .await?;
+        let target = list_keys(&self.client, &config.bucket, &config.target).await?;
 
         let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
             if let Some(true) = entry.path().file_name().map(|f| {
@@ -205,21 +213,17 @@ impl CloudStorage for AwsStorage {
                 .map_err(UtilsError::IOError)?
                 .is_file()
             {
-                let file_name = entry.path().to_string_lossy().to_string();
-                let file_name = sanitize_file_path(&file_name); // sanitize file_name for windows only onces here
+                let full_path = entry.path();
                 let source_file_size = entry.metadata().await.map_err(UtilsError::IOError)?.len();
-                let source_file_name = Path::new(&file_name)
-                    .strip_prefix(&config.source)
-                    .map_err(UtilsError::StripPrefixError)?;
-                let source_file_name = source_file_name.to_string_lossy().to_string();
-                let target_file_name = format!("{}{}", &config.target, &source_file_name);
+                let target_file_name =
+                    make_s3_key(&Path::new(&config.source), &full_path, &config.target)?;
                 let target_file_size = target.get(&target_file_name).unwrap_or(&0);
 
                 if source_file_size != *target_file_size as u64 {
                     let task_info = UploadTaskInfo {
                         client: self.client.clone(),
                         bucket: config.bucket.clone(),
-                        local_path: file_name.clone(),
+                        local_path: full_path.clone(),
                         s3_key: target_file_name,
                         size: source_file_size,
                         chunk_size: chunk_size as u64,
@@ -230,14 +234,15 @@ impl CloudStorage for AwsStorage {
                         .acquire_owned()
                         .await
                         .map_err(|e| SyncToolError::UnexpectedError(e.into()))?;
+
                     tasks.spawn(async move {
                         let _permit = permit;
                         match spawn_upload_task(task_info).await {
                             Ok(_) => Ok(source_file_size),
                             Err(e) => Err(e),
                         }
-                        .map(|bytes| (file_name.clone(), bytes))
-                        .map_err(|err| (file_name, err))
+                        .map(|bytes| (normalize_path(&full_path), bytes))
+                        .map_err(|err| (normalize_path(&full_path), err))
                     });
                 }
             }
@@ -266,14 +271,19 @@ impl CloudStorage for AwsStorage {
             }
         }
 
-        let bytes_mb = uploaded_bytes_total as f64 / (1024.0 * 1024.0);
-        info!("Uploaded: {uploaded_files_count} files | {bytes_mb:.2} MB");
+        if uploaded_files_count > 0 {
+            let bytes_mb = uploaded_bytes_total as f64 / (1024.0 * 1024.0);
+            info!("Uploaded: {uploaded_files_count} files | {bytes_mb:.2} MB");
+        }
+
         if !failed_uploads.is_empty() {
             error!("Failed to upload: {} files", failed_uploads.len());
             for file in failed_uploads.iter() {
                 error!("Failed to upload file: {}", file);
             }
-        } 
+        } else if uploaded_files_count == 0 {
+            info!("All files are already synced. No uploads needed.");
+        }
         Ok(())
     }
 }
