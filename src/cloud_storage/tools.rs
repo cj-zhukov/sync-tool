@@ -7,12 +7,12 @@ use aws_sdk_s3::{
 use aws_smithy_types::byte_stream::Length;
 use color_eyre::Report;
 use log::{error, info};
-use std::{collections::HashMap, path::PathBuf, time::Duration};
-use tokio::time::sleep;
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
 
 use crate::{
     cloud_storage::{error::AwsStorageError, path_conversions::normalize_path},
-    utils::constants::RETRIES,
+    utils::constants::{CHUNKS_MAX_WORKERS, CHUNK_RETRIES, RETRIES},
 };
 
 #[derive(Debug)]
@@ -138,38 +138,195 @@ where
 /// If file is small
 async fn upload_object(
     client: Client,
-    bucket_name: String,
-    file_name: PathBuf,
+    bucket: String,
+    file_path: PathBuf,
     key: String,
     file_size: u64,
 ) -> Result<(), AwsStorageError> {
-    info!("Uploading file: {}", normalize_path(&file_name));
-    let body = ByteStream::from_path(&file_name)
+    info!("Uploading file: {}", normalize_path(&file_path));
+    let body = ByteStream::from_path(&file_path)
         .await
         .map_err(AwsStorageError::ByteSreamError)?;
 
     client
         .put_object()
-        .bucket(&bucket_name)
+        .bucket(&bucket)
         .key(&key)
         .body(body)
         .send()
         .await
         .map_err(AwsStorageError::PutObjectError)?;
 
-    let data = get_object(&client, &bucket_name, &key).await?;
-    let data_length = data.content_length().unwrap_or(0) as u64;
-    if file_size != data_length {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(
-            "Source and target data sizes after upload don't match",
-        )));
+    let result = client.get_object().bucket(bucket).key(key).send().await?; //#TODO think about adding a parameter because can be expensive
+    let uploaded_size = result.content_length().unwrap_or(0) as u64;
+    if uploaded_size != file_size {
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+            "Size mismatch after upload. Expected {}, got {}",
+            file_size, uploaded_size
+        ))));
     }
-    info!("Uploaded file: {}", normalize_path(file_name));
+    info!("Uploaded file: {}", normalize_path(file_path));
     Ok(())
 }
 
-/// If file is too big
+/// If file is big, upload it by chunks and chunks in parallel
 async fn upload_object_multipart(
+    client: Client,
+    bucket: String,
+    file_path: PathBuf,
+    key: String,
+    file_size: u64,
+    chunk_size: u64,
+    max_chunks: u64,
+) -> Result<(), AwsStorageError> {
+    info!("Uploading file: {}", normalize_path(&file_path));
+
+    if file_size == 0 {
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+            "File is empty: {}",
+            normalize_path(&file_path)
+        ))));
+    }
+
+    let chunk_count = (file_size + chunk_size - 1) / chunk_size;
+    if chunk_count > max_chunks {
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+            "Too many chunks for {}: {}. Increase chunk size or max_chunks.",
+            normalize_path(&file_path),
+            chunk_count
+        ))));
+    }
+
+    let multipart_upload_res = client
+        .create_multipart_upload()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await?;
+
+    let upload_id = multipart_upload_res.upload_id().ok_or_else(|| {
+        AwsStorageError::UnexpectedError(Report::msg(format!(
+            "No upload ID returned for file: {}",
+            normalize_path(&file_path)
+        )))
+    })?;
+
+    let path = Arc::new(file_path);
+    let semaphore = Arc::new(Semaphore::new(CHUNKS_MAX_WORKERS));
+    let mut tasks = JoinSet::new();
+
+    for part_index in 0..chunk_count {
+        let client = client.clone();
+        let bucket = bucket.clone();
+        let key = key.clone();
+        let upload_id = upload_id.to_string();
+        let path = Arc::clone(&path);
+        let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
+            AwsStorageError::UnexpectedError(Report::msg(format!("Can't acquire semaphore: {e}")))
+        })?;
+
+        tasks.spawn(async move {
+            let _permit = permit;
+            let offset = part_index * chunk_size;
+            let this_chunk_size = std::cmp::min(chunk_size, file_size - offset);
+            let part_number = (part_index + 1) as i32;
+
+            let mut last_err = None;
+
+            for attempt in 1..=CHUNK_RETRIES {
+                let stream_result = ByteStream::read_from()
+                    .path(&*path)
+                    .offset(offset)
+                    .length(Length::Exact(this_chunk_size))
+                    .build()
+                    .await;
+
+                let stream = match stream_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        last_err = Some(AwsStorageError::UnexpectedError(Report::msg(format!(
+                            "ByteStream error: {e}"
+                        ))));
+                        continue;
+                    }
+                };
+
+                let result = client
+                    .upload_part()
+                    .bucket(&bucket)
+                    .key(&key)
+                    .upload_id(&upload_id)
+                    .part_number(part_number)
+                    .body(stream)
+                    .send()
+                    .await;
+
+                match result {
+                    Ok(upload_part) => {
+                        let e_tag = upload_part.e_tag.ok_or_else(|| {
+                            AwsStorageError::UnexpectedError(Report::msg(format!(
+                                "Missing ETag for part {part_number}"
+                            )))
+                        })?;
+
+                        return Ok(CompletedPart::builder()
+                            .e_tag(e_tag)
+                            .part_number(part_number)
+                            .build());
+                    }
+                    Err(e) => {
+                        last_err = Some(AwsStorageError::UnexpectedError(Report::msg(format!(
+                            "Failed to upload part {part_number}, attempt {attempt}: {e}"
+                        ))));
+                        tokio::time::sleep(std::time::Duration::from_millis(300 * attempt)).await;
+                    }
+                }
+            }
+
+            Err(last_err.unwrap_or_else(|| {
+                AwsStorageError::UnexpectedError(Report::msg(format!(
+                    "Part {part_number} failed with unknown error"
+                )))
+            }))
+        });
+    }
+
+    let mut completed_parts = Vec::with_capacity(chunk_count as usize);
+    while let Some(result) = tasks.join_next().await {
+        let res: CompletedPart = result
+            .map_err(|e| AwsStorageError::UnexpectedError(Report::msg(e)))?
+            .map_err(|e| AwsStorageError::UnexpectedError(Report::msg(e)))?;
+        completed_parts.push(res);
+    }
+
+    completed_parts.sort_by_key(|part| part.part_number());
+    let completed_upload = CompletedMultipartUpload::builder()
+        .set_parts(Some(completed_parts))
+        .build();
+
+    client
+        .complete_multipart_upload()
+        .bucket(&bucket)
+        .key(&key)
+        .upload_id(upload_id)
+        .multipart_upload(completed_upload)
+        .send()
+        .await?;
+
+    let result = client.get_object().bucket(bucket).key(key).send().await?; //#TODO think about adding a parameter because can be expensive
+    let uploaded_size = result.content_length().unwrap_or(0) as u64;
+    if uploaded_size != file_size {
+        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+            "Size mismatch after upload. Expected {}, got {}",
+            file_size, uploaded_size
+        ))));
+    }
+    info!("Uploaded file: {}", normalize_path(path.as_ref()));
+    Ok(())
+}
+
+// #TODO use this fn when network is slow?
+pub async fn upload_object_multipart_v1(
     client: Client,
     bucket_name: String,
     file_name: PathBuf,
@@ -258,7 +415,7 @@ async fn upload_object_multipart(
         .await
         .map_err(AwsStorageError::CompleteMultipartError)?;
 
-    let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?; //#TODO think about adding a parameter because can be expensive
+    let data: GetObjectOutput = get_object(&client, &bucket_name, &key).await?;
     let data_length = data.content_length().unwrap_or(0) as u64;
     if file_size != data_length {
         return Err(AwsStorageError::UnexpectedError(Report::msg(

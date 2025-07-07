@@ -79,7 +79,7 @@ impl CloudStorage for AwsStorage {
                 info!("Found file to upload: {file_name} | {bytes_mb:.2} MB");
             }
             let files_to_upload_count = files_to_upload.len();
-            let bytes_to_upload = files_to_upload.iter().fold(0, |acc, file| acc +  file.1);
+            let bytes_to_upload = files_to_upload.iter().fold(0, |acc, file| acc + file.1);
             let bytes_to_upload = bytes_to_upload as f64 / (1024.0 * 1024.0);
             info!("Found to upload: {files_to_upload_count} files | {bytes_to_upload:.2} MB");
         }
