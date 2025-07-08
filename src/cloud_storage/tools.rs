@@ -233,7 +233,7 @@ async fn upload_object_multipart(
 
             let mut last_err = None;
 
-            for attempt in 1..=CHUNK_RETRIES {
+            for attempt in 1..=CHUNK_RETRIES { // #TODO chunk retry add in config file
                 let stream_result = ByteStream::read_from()
                     .path(&*path)
                     .offset(offset)
@@ -325,7 +325,7 @@ async fn upload_object_multipart(
     Ok(())
 }
 
-// #TODO use this fn when network is slow?
+// #TODO use this fn when network is slow, add parameter in config slow_network = true
 pub async fn upload_object_multipart_v1(
     client: Client,
     bucket_name: String,
