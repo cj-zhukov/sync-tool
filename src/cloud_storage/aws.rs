@@ -14,7 +14,7 @@ use crate::{
         tools::{list_keys, spawn_upload_task, UploadTaskInfo},
     },
     domain::CloudStorage,
-    utils::{config::AppConfig, constants::FILES_TO_IGNORE, error::UtilsError},
+    utils::{config::AppConfig, error::UtilsError},
     SyncToolError,
 };
 
@@ -34,15 +34,19 @@ impl CloudStorage for AwsStorage {
     async fn dif(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let target = list_keys(&self.client, &config.bucket, &config.target).await?;
 
-        let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
-            if let Some(true) = entry.path().file_name().map(|f| {
-                FILES_TO_IGNORE
-                    .iter()
-                    .any(|ignore| f.to_string_lossy() == *ignore)
-            }) {
-                return Filtering::IgnoreDir;
+        let files_to_ignore = config.files_to_ignore.clone().unwrap_or_default();
+        let mut entries = WalkDir::new(&config.source).filter(move |entry| {
+            let files_to_ignore = files_to_ignore.clone();
+            async move {
+                if let Some(true) = entry.path().file_name().map(|f| {
+                    files_to_ignore
+                        .iter()
+                        .any(|ignore| f.to_string_lossy() == *ignore)
+                }) {
+                    return Filtering::IgnoreDir;
+                }
+                Filtering::Continue
             }
-            Filtering::Continue
         });
 
         let mut files_to_upload = Vec::new();
@@ -89,15 +93,19 @@ impl CloudStorage for AwsStorage {
     /// Upload files from source to target without checking file name and size,
     /// so target files if exist will be overwritten
     async fn upload(&self, config: &AppConfig) -> Result<(), SyncToolError> {
-        let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
-            if let Some(true) = entry.path().file_name().map(|f| {
-                FILES_TO_IGNORE
-                    .iter()
-                    .any(|ignore| f.to_string_lossy() == *ignore)
-            }) {
-                return Filtering::IgnoreDir;
+        let files_to_ignore = config.files_to_ignore.clone().unwrap_or_default();
+        let mut entries = WalkDir::new(&config.source).filter(move |entry| {
+            let files_to_ignore = files_to_ignore.clone();
+            async move {
+                if let Some(true) = entry.path().file_name().map(|f| {
+                    files_to_ignore
+                        .iter()
+                        .any(|ignore| f.to_string_lossy() == *ignore)
+                }) {
+                    return Filtering::IgnoreDir;
+                }
+                Filtering::Continue
             }
-            Filtering::Continue
         });
 
         let mut tasks = JoinSet::new();
@@ -129,6 +137,9 @@ impl CloudStorage for AwsStorage {
                     size: source_file_size,
                     chunk_size: chunk_size as u64,
                     max_chunks: config.max_chunks as u64,
+                    retries: config.retries,
+                    chunk_retries: config.chunk_retries,
+                    chunk_workers: config.chunk_workers,
                 };
 
                 let permit = Arc::clone(&sem)
@@ -191,15 +202,19 @@ impl CloudStorage for AwsStorage {
     async fn sync(&self, config: &AppConfig) -> Result<(), SyncToolError> {
         let target = list_keys(&self.client, &config.bucket, &config.target).await?;
 
-        let mut entries = WalkDir::new(&config.source).filter(|entry| async move {
-            if let Some(true) = entry.path().file_name().map(|f| {
-                FILES_TO_IGNORE
-                    .iter()
-                    .any(|ignore| f.to_string_lossy() == *ignore)
-            }) {
-                return Filtering::IgnoreDir;
+        let files_to_ignore = config.files_to_ignore.clone().unwrap_or_default();
+        let mut entries = WalkDir::new(&config.source).filter(move |entry| {
+            let files_to_ignore = files_to_ignore.clone();
+            async move {
+                if let Some(true) = entry.path().file_name().map(|f| {
+                    files_to_ignore
+                        .iter()
+                        .any(|ignore| f.to_string_lossy() == *ignore)
+                }) {
+                    return Filtering::IgnoreDir;
+                }
+                Filtering::Continue
             }
-            Filtering::Continue
         });
 
         let mut tasks = JoinSet::new();
@@ -233,6 +248,9 @@ impl CloudStorage for AwsStorage {
                         size: source_file_size,
                         chunk_size: chunk_size as u64,
                         max_chunks: config.max_chunks as u64,
+                        retries: config.retries,
+                        chunk_retries: config.chunk_retries,
+                        chunk_workers: config.chunk_workers,
                     };
 
                     let permit = Arc::clone(&sem)

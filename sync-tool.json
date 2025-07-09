@@ -5,5 +5,9 @@
     "target": "path/to/target/",
     "workers": 10,
     "chunk_size": 10,
-    "max_chunks": 10000
+    "max_chunks": 10000,
+    "files_to_ignore": [".DS_Store"],
+    "retries": 5,
+    "chunk_retries": 5,
+    "chunk_workers": 10
 }
