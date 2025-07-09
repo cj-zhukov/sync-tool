@@ -1,0 +1,9 @@
+{
+    "bucket": "foo",
+    "region": "bar",
+    "source": "path/to/source/",
+    "target": "path/to/target/",
+    "workers": 10,
+    "chunk_size": 10,
+    "max_chunks": 10000
+}
