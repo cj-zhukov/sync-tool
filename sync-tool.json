@@ -9,5 +9,6 @@
     "files_to_ignore": [".DS_Store"],
     "retries": 5,
     "chunk_retries": 5,
-    "chunk_workers": 10
+    "chunk_workers": 10,
+    "check_size": true
 }

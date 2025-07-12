@@ -140,6 +140,7 @@ impl CloudStorage for AwsStorage {
                     retries: config.retries,
                     chunk_retries: config.chunk_retries,
                     chunk_workers: config.chunk_workers,
+                    check_size: config.check_size,
                 };
 
                 let permit = Arc::clone(&sem)
@@ -251,6 +252,7 @@ impl CloudStorage for AwsStorage {
                         retries: config.retries,
                         chunk_retries: config.chunk_retries,
                         chunk_workers: config.chunk_workers,
+                        check_size: config.check_size,
                     };
 
                     let permit = Arc::clone(&sem)

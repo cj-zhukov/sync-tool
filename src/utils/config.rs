@@ -13,4 +13,5 @@ pub struct AppConfig {
     pub retries: usize,    // how many times try to reupload file
     pub chunk_retries: usize, // how many times try to reupload chunk per file
     pub chunk_workers: usize, // how many chunks of file to upload at once per file
+    pub check_size: bool, // check final file size after uploading
 }

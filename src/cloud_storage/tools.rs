@@ -24,6 +24,7 @@ pub struct UploadTaskInfo {
     pub retries: usize,
     pub chunk_retries: usize,
     pub chunk_workers: usize,
+    pub check_size: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ pub struct UploadInfo {
     pub local_path: PathBuf,
     pub key: String,
     pub size: u64,
+    pub check_size: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,7 @@ pub async fn spawn_upload_task(task_info: UploadTaskInfo) -> Result<(), AwsStora
         retries,
         chunk_retries,
         chunk_workers,
+        check_size,
     } = task_info;
 
     let upload_info = UploadInfo {
@@ -101,6 +104,7 @@ pub async fn spawn_upload_task(task_info: UploadTaskInfo) -> Result<(), AwsStora
         local_path,
         key: s3_key,
         size,
+        check_size,
     };
     let upload_info_extra = UploadInfoExtra {
         chunk_size,
@@ -173,14 +177,18 @@ async fn upload_object(upload_info: UploadInfo) -> Result<(), AwsStorageError> {
         .bucket(upload_info.bucket)
         .key(upload_info.key)
         .send()
-        .await?; //#TODO think about adding a parameter because can be expensive
-    let uploaded_size = result.content_length().unwrap_or(0) as u64;
-    if uploaded_size != upload_info.size {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
-            "Size mismatch after upload. Expected {}, got {}",
-            upload_info.size, uploaded_size
-        ))));
+        .await?; 
+
+    if upload_info.check_size {
+        let uploaded_size = result.content_length().unwrap_or(0) as u64;
+        if uploaded_size != upload_info.size {
+            return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+                "Size mismatch after upload. Expected {}, got {}",
+                upload_info.size, uploaded_size
+            ))));
+        }
     }
+
     info!("Uploaded file: {}", normalize_path(&upload_info.local_path));
     Ok(())
 }
@@ -337,14 +345,18 @@ async fn upload_object_multipart(
         .bucket(upload_info.bucket)
         .key(upload_info.key)
         .send()
-        .await?; //#TODO think about adding a parameter because can be expensive
-    let uploaded_size = result.content_length().unwrap_or(0) as u64;
-    if uploaded_size != upload_info.size {
-        return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
-            "Size mismatch after upload. Expected {}, got {}",
-            upload_info.size, uploaded_size
-        ))));
+        .await?; 
+
+    if upload_info.check_size {
+        let uploaded_size = result.content_length().unwrap_or(0) as u64;
+        if uploaded_size != upload_info.size {
+            return Err(AwsStorageError::UnexpectedError(Report::msg(format!(
+                "Size mismatch after upload. Expected {}, got {}",
+                upload_info.size, uploaded_size
+            ))));
+        }
     }
+
     info!("Uploaded file: {}", normalize_path(path.as_ref()));
     Ok(())
 }
