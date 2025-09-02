@@ -177,7 +177,7 @@ async fn upload_object(upload_info: UploadInfo) -> Result<(), AwsStorageError> {
         .bucket(upload_info.bucket)
         .key(upload_info.key)
         .send()
-        .await?; 
+        .await?;
 
     if upload_info.check_size {
         let uploaded_size = result.content_length().unwrap_or(0) as u64;
@@ -345,7 +345,7 @@ async fn upload_object_multipart(
         .bucket(upload_info.bucket)
         .key(upload_info.key)
         .send()
-        .await?; 
+        .await?;
 
     if upload_info.check_size {
         let uploaded_size = result.content_length().unwrap_or(0) as u64;

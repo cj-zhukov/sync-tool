@@ -5,12 +5,27 @@ pub mod utils;
 
 pub use error::SyncToolError;
 
+use clap::{Parser, ValueEnum};
 use log::error;
+
+#[derive(Parser, Debug)]
+#[command(name = "sync-tool")]
+#[command(about = "A tool to sync files to S3")]
+pub struct Cli {
+    /// Mode of operation: dif, sync, upload
+    #[arg(value_enum)]
+    pub mode: Mode,
+
+    /// Path to config file
+    #[arg(short, long, default_value = "sync-tool.json")]
+    pub config: String,
+}
 
 /// Mode has 3 options:
 /// dif - dry-run, calculate and show dif
 /// upload - simple upload files without checking target file names and sizes
 /// sync - smart check file name and size and upload
+#[derive(Debug, Clone, ValueEnum)]
 pub enum Mode {
     Dif,
     Upload,

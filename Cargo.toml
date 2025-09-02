@@ -12,6 +12,7 @@ aws-sdk-s3 = "1"
 aws-smithy-runtime = "1.0.1"
 aws-smithy-runtime-api = { version = "1.0.1", features = ["client"] }
 aws-smithy-types = { version = "1.0.1", features = ["http-body-0-4-x"] }
+clap = { version = "4.5", features = ["derive"] }
 config = "0.15"
 color-eyre = "0.6"
 log = "0.4"
